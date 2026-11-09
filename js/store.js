@@ -5,7 +5,7 @@
   const C = window.Core;
   const COLS = ["employees", "records", "leaveLedger", "shiftSchedule"];
   const LS_TOKEN = "att_token", LS_PENDING = "att_pending";
-  const POLL_MS = 20000;
+  const POLL_MS = 4000;
 
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
   async function deriveKey(password, salt) {
@@ -241,14 +241,18 @@
       if (this.poller) return;
       this.poller = setInterval(() => this.poll(), POLL_MS);
       document.addEventListener("visibilitychange", () => { if (!document.hidden) this.poll(); });
+      window.addEventListener("focus", () => this.poll());
+      window.addEventListener("online", () => this.poll());
     }
     async poll() {
-      if (document.hidden || !this.token || this.dirty || this.pulling) return;
+      if (document.hidden || !this.token || this.dirty || this.pulling || this.polling) return;
+      this.polling = true;
       try {
         const r = await this.call("rev");
         if (this.failed) { this.failed = false; this.onStatus(); }
         if (r.rev !== this.rev && !this.dirty) await this.pullRemote();
       } catch (_e) { /* 離線：下次再試 */ }
+      this.polling = false;
     }
     async pullRemote() {
       if (this.pulling || this.dirty) return;

@@ -75,10 +75,14 @@ function pruneTokens_() {
   var p = props_(), all = p.getProperties(), now = Date.now();
   Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0 && Number(all[k]) < now) p.deleteProperty(k); });
 }
-function validToken_(t) {
+function validToken_(t) {          // 幾秒一次的同步檢查走快取，避開 PropertiesService 每日讀取上限
   if (!t) return false;
-  var exp = props_().getProperty("tok_" + sha_(String(t)));
-  return !!exp && Number(exp) > Date.now();
+  var hash = sha_(String(t)), cache = CacheService.getScriptCache();
+  if (cache.get("tk_" + hash)) return true;
+  var exp = props_().getProperty("tok_" + hash);
+  if (!exp || Number(exp) <= Date.now()) return false;
+  cache.put("tk_" + hash, "1", Math.min(21600, Math.floor((Number(exp) - Date.now()) / 1000)));
+  return true;
 }
 function setup_(req) {
   return withLock_(function () {
@@ -102,14 +106,23 @@ function login_(req) {
   cache.remove("loginFails");
   return { token: issueToken_() };
 }
-function logout_(req) { props_().deleteProperty("tok_" + sha_(String(req.token))); return { ok: true }; }
+function logout_(req) {
+  var hash = sha_(String(req.token));
+  props_().deleteProperty("tok_" + hash);
+  CacheService.getScriptCache().remove("tk_" + hash);
+  return { ok: true };
+}
 function changePassword_(req) {
   if (!checkKey_(req.key || "")) return { error: "wrong_password" };
   if (!req.newKey) return { error: "bad_request" };
   var p = props_();
   p.setProperty("pwHash", sha_(p.getProperty("salt") + ":" + req.newKey));
   var all = p.getProperties();
-  Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0) p.deleteProperty(k); });   // 其他裝置全部登出
+  Object.keys(all).forEach(function (k) {                // 其他裝置全部登出
+    if (k.indexOf("tok_") !== 0) return;
+    p.deleteProperty(k);
+    CacheService.getScriptCache().remove("tk_" + k.slice(4));
+  });
   return { token: issueToken_() };
 }
 
@@ -126,7 +139,12 @@ function ensureSheets_() {
     }
   });
 }
-function sheet_(c) { return SpreadsheetApp.getActive().getSheetByName(SHEETS[c].name); }
+function sheet_(c) {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(SHEETS[c].name);
+  if (sh) return sh;
+  ensureSheets_();
+  return ss.getSheetByName(SHEETS[c].name);
+}
 function safe_(v) {               // 使用者輸入的文字不能被試算表當成公式
   var s = v === null || v === undefined ? "" : String(v);
   return /^[=+\-@]/.test(s) ? "'" + s : s;
@@ -147,13 +165,23 @@ function readAll_(c) {
   var n = SHEETS[c].head.length;
   return sh.getRange(2, n, last - 1, 1).getValues().map(function (r) { return JSON.parse(r[0]); });
 }
-function revision_() { return Number(props_().getProperty("rev") || 0); }
-function bump_() { var r = revision_() + 1; props_().setProperty("rev", String(r)); return r; }
+function revision_() {
+  var cache = CacheService.getScriptCache(), v = cache.get("rev");
+  if (v !== null) return Number(v);
+  v = Number(props_().getProperty("rev") || 0);
+  cache.put("rev", String(v), 21600);
+  return v;
+}
+function bump_() {
+  var r = Number(props_().getProperty("rev") || 0) + 1;
+  props_().setProperty("rev", String(r));
+  CacheService.getScriptCache().put("rev", String(r), 21600);
+  return r;
+}
 
 function rev_() { return { rev: revision_() }; }
 
 function load_() {
-  ensureSheets_();
   var out = { rev: revision_() };
   ["employees", "records", "leaveLedger", "shiftSchedule"].forEach(function (c) { out[c] = readAll_(c); });
   var glyphs = {};
@@ -188,7 +216,6 @@ function applyCollection_(c, ops) {
 
 function apply_(req) {
   return withLock_(function () {
-    ensureSheets_();
     var before = revision_();
     COLLECTIONS.forEach(function (c) { applyCollection_(c, (req.ops || {})[c]); });
     return { rev: bump_(), prevRev: before };

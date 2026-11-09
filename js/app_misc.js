@@ -147,6 +147,8 @@
     },
     loadSettingsIntoForm() {
       if (!this.setCap) return;
+      const focus = document.activeElement;       // 別台裝置更新時，不蓋掉正在輸入的欄位
+      if (focus && focus.tagName === "INPUT" && this.tabs["🛠️ 軟體設定"].contains(focus)) return;
       const s = this.db.settings;
       this.setAppearance.set(s.appearanceMode === "light" ? "淺色" : "深色");
       this.renderAppearanceChip();

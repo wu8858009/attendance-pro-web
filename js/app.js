@@ -88,7 +88,7 @@
       }
       this.L.db = this.store.db;
       this.store.onStatus = () => this.refreshFooter();
-      this.store.onRemote = () => { this.L.db = this.store.db; this.refreshAll(); this.onTabChange(); };
+      this.store.onRemote = () => { this.L.db = this.store.db; this.refreshAll(); };   // 只更新畫面，不重帶正在填的表單
       this.store.onAuthLost = () => this.showLogin("登入已過期，請重新登入");
       window.addEventListener("beforeunload", (e) => { if (this.store.dirty) { e.preventDefault(); e.returnValue = ""; } });
       this.buildShell();
