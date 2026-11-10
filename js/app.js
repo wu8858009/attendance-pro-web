@@ -234,7 +234,8 @@
       this.buildEntryTab(); this.buildRecordsTab(); this.buildEmployeesTab(); this.buildScheduleTab(); this.buildLeaveTab();
       this.buildReportTab(); this.buildHelpTab(); this.buildSettingsTab(); this.buildManualTab(); this.buildAlmanacTab(); this.buildAccountTab(); this.buildAuditTab();
       for (const [n] of NAV_DEFS) if (NAV_MOD[n] && !this.can(NAV_MOD[n])) this.tabs[n].classList.add("ro");
-      this.selectTab(this.navOrder.includes("✏️ 打卡登錄") ? "✏️ 打卡登錄" : this.navOrder.find((n) => NAV_MOD[n]) || this.navOrder[0]);
+      this.selectTab(this.resumeTab() || (this.navOrder.includes("✏️ 打卡登錄") ? "✏️ 打卡登錄" : this.navOrder.find((n) => NAV_MOD[n]) || this.navOrder[0]));
+      this.watchResumeTab();
       this.refreshAll();
       this.bindShortcuts();
       if (this.can("settings")) this.checkLaw(false);
@@ -301,6 +302,20 @@
       };
       document.addEventListener("pointermove", move);
       document.addEventListener("pointerup", up);
+    }
+    // 手機常在背景把程式關掉，自動更新也會重新載入：兩小時內回來時停在原本的頁面
+    resumeTab() {
+      try {
+        const r = JSON.parse(localStorage.getItem("att_resume") || "null");
+        return r && r.u === this.me.username && Date.now() - r.t < 7200000 && this.navOrder.includes(r.tab) ? r.tab : "";
+      } catch (_e) { return ""; }
+    }
+    watchResumeTab() {
+      if (this.resumeWatched) return;
+      this.resumeWatched = true;
+      const save = () => { if (this.me && this.navSelected) localStorage.setItem("att_resume", JSON.stringify({ u: this.me.username, tab: this.navSelected, t: Date.now() })); };
+      document.addEventListener("visibilitychange", () => { if (document.hidden) save(); });
+      window.addEventListener("pagehide", save);
     }
     selectTab(name) {
       for (const n in this.tabs) this.tabs[n].classList.toggle("on", n === name);

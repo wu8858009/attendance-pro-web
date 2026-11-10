@@ -7,6 +7,7 @@
   const LS_TOKEN = "att_token", LS_PENDING = "att_pending", LS_PREFS = "att_prefs", LS_REMEMBER = "att_remember", LS_NO_AUTO = "att_no_auto";
   const PREF_KEYS = ["navOrder", "appearanceMode", "scheduleCellFontSize"];   // 沒有軟體設定權限時，這幾項只存在自己的裝置
   const POLL_MS = 4000;
+  const CALL_LIMIT = { rev: 20000, load: 90000, apply: 90000 };   // 手機從背景回來時，凍結中的連線可能永遠沒回應，逾時才能繼續同步
 
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
   async function deriveKey(password, salt) {
@@ -40,12 +41,19 @@
       this.pendingCount = 0;
     }
     async call(action, payload) {
-      const res = await fetch(this.url, {
-        method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({ action, token: this.token }, payload || {})), redirect: "follow",
-      });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
+      const body = JSON.stringify(Object.assign({ action, token: this.token }, payload || {}));
+      const ctl = CALL_LIMIT[action] ? new AbortController() : null;
+      const stop = ctl ? setTimeout(() => ctl.abort(), CALL_LIMIT[action]) : 0;
+      let data;
+      try {
+        const res = await fetch(this.url, {
+          method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body, redirect: "follow",
+          keepalive: document.hidden && body.length < 20000,    // 切到背景時，頁面被凍結也要讓這筆送得出去
+          signal: ctl ? ctl.signal : undefined,
+        });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        data = await res.json();
+      } finally { clearTimeout(stop); }
       if (data.error === "auth") { this.setToken(""); this.onAuthLost(); throw new Error("auth"); }
       if (data.error === "server") throw new Error(data.message || "server");
       if (data.error === "must_change" || (data.error === "forbidden" && action === "apply")) throw new Error(data.error);
@@ -275,14 +283,23 @@
     startPolling() {
       if (this.poller) return;
       this.poller = setInterval(() => this.poll(), POLL_MS);
-      document.addEventListener("visibilitychange", () => { if (!document.hidden) this.poll(); });
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) this.wake();
+        else if (this.token && this.queue) { clearTimeout(this.timer); this.flush(); }    // 切到背景前先把修改送出去
+      });
+      document.addEventListener("resume", () => this.wake());
+      window.addEventListener("pageshow", (e) => { if (e.persisted) this.wake(); });
       window.addEventListener("focus", () => this.poll());
       window.addEventListener("online", () => this.poll());
       window.addEventListener("pagehide", () => { if (this.token) navigator.sendBeacon(this.url, JSON.stringify({ action: "bye", token: this.token })); });
     }
+    wake() {                                 // 從背景回來：補送沒送完的修改，並立刻抓最新資料
+      if (this.token && this.queue) { clearTimeout(this.timer); this.flush(); }
+      this.poll();
+    }
     async poll() {
       if (document.hidden) {                 // 背景時每分鐘回報一次，讓管理員看得到還開著
-        if (this.token && Date.now() - (this.lastBeat || 0) >= 60000) { this.lastBeat = Date.now(); this.call("rev").catch(() => {}); }
+        if (this.token && Date.now() - (this.lastBeat || 0) >= 55000) { this.lastBeat = Date.now(); this.call("rev").catch(() => {}); }
         return;
       }
       if (document.hidden || !this.token || this.dirty || this.pulling || this.polling) return;
