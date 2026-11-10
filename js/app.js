@@ -449,9 +449,10 @@
       const fIn = new U.TimeDropdown(defIn, () => this.updatePreview());
       const fOut = new U.TimeDropdown(defOut, () => { this.updatePreview(); this.scheduleEntryNotice(); });
       const loc = U.input("例如：總公司、客戶端、居家", { oninput: () => this.updatePreview() });
-      const seg = { in: fIn, out: fOut, loc };
+      const box = () => h("input", { type: "checkbox", onchange: () => this.updatePreview() });
+      const seg = { in: fIn, out: fOut, loc, forgotIn: box(), forgotOut: box() };
       seg.row = h("div", { class: "grid3 mb8", style: removable ? { gridTemplateColumns: "1fr 1fr 1fr 32px" } : null },
-        h("div", {}, U.label(`時段${idx + 1} 上班`), fIn), h("div", {}, U.label(`時段${idx + 1} 下班`), fOut), h("div", {}, U.label("地點(選填)"), loc),
+        h("div", {}, U.label(`時段${idx + 1} 上班`), fIn, h("label", { class: "check" }, seg.forgotIn, "忘打上班卡")), h("div", {}, U.label(`時段${idx + 1} 下班`), fOut, h("label", { class: "check" }, seg.forgotOut, "忘打下班卡")), h("div", {}, U.label("地點(選填)"), loc),
         removable ? U.danger("✖", () => this.removeSegmentRow(seg), { style: { padding: 0 } }) : null);
       this.segmentsFrame.append(seg.row);
       this.entrySegments.push(seg);
@@ -466,7 +467,15 @@
     }
     updateSegmentAddBtn() { this.segmentAddBtn.style.display = this.entrySegments.length >= 3 ? "none" : ""; }
     getEntrySegments() {
-      return this.entrySegments.map((s) => ({ in: s.in.get().trim(), out: s.out.get().trim(), location: s.loc.value.trim() })).filter((s) => s.in && s.out);
+      return this.entrySegments.map((s) => Object.assign({ in: s.in.get().trim(), out: s.out.get().trim(), location: s.loc.value.trim() }, s.forgotIn.checked ? { forgotIn: true } : null, s.forgotOut.checked ? { forgotOut: true } : null)).filter((s) => s.in && s.out);
+    }
+    forgotPunchText(segs) {              // 例如「忘打上班卡 09:00」；存進備註，報表與 Excel 不用另外改
+      const out = [], p = (i) => (segs.length > 1 ? `時段${i + 1} ` : "");
+      segs.forEach((s, i) => {
+        if (s.forgotIn) out.push(`${p(i)}忘打上班卡 ${s.in}`);
+        if (s.forgotOut) out.push(`${p(i)}忘打下班卡 ${s.out}`);
+      });
+      return out.join("、");
     }
     resetEntrySegments(segments) {
       this.entrySegments.forEach((s) => s.row.remove());
@@ -602,6 +611,8 @@
       }[flag];
       pf.append(this.statusBanner(flag, title, subtitle));
       if (this.entryHint) pf.append(h("div", { class: "pl sub", style: { whiteSpace: "pre-wrap" }, text: this.entryHint }));
+      const forgot = this.forgotPunchText(segs);
+      if (forgot) pf.append(h("div", { class: "pl" }, U.colored(`🕘 將註記：${forgot}（工時以填寫的時間計算）`, X.orange)));
       if ((flag === "ot" || typhoon) && r.detailLines.length) pf.append(h("div", { class: "pl sub" }, r.detailLines.map((l) => h("div", { text: `・${l}` }))));
       if (r.warnings.length) pf.append(h("div", { class: "pl" }, r.warnings.map((w) => U.colored(`⚠ ${w}`, X.orange))));
       if (flag === "leave" && !typhoon && this.can("punch")) {
@@ -642,7 +653,7 @@
       if (!segs.length) { await msg.warn("提醒", "請至少填寫一段完整的上下班時間"); return; }
       const breakMin = num(this.fBreak.value || "0"), sched = Number.isNaN(breakMin) ? NaN : this.getScheduledHours(emp, segs, breakMin);
       if (Number.isNaN(breakMin) || Number.isNaN(sched)) { await msg.warn("提醒", "時數需為數字"); return; }
-      const rec = { id: C.newId(), empId: emp.id, date: dateStr, dayType: DAYTYPE_KEY[this.fDaytype.get()], segments: segs, clockIn: segs[0].in, clockOut: segs[segs.length - 1].out, breakMin, scheduledHours: sched, note: this.fNote.value.trim() };
+      const rec = { id: C.newId(), empId: emp.id, date: dateStr, dayType: DAYTYPE_KEY[this.fDaytype.get()], segments: segs, clockIn: segs[0].in, clockOut: segs[segs.length - 1].out, breakMin, scheduledHours: sched, note: [this.forgotPunchText(segs), this.fNote.value.trim()].filter(Boolean).join("；") };
       if (this.db.records.some((r) => r.empId === emp.id && r.date === dateStr)) {
         await msg.warn("重複登錄", `${emp.name} 在 ${dateStr} 已有出勤紀錄，不能重複輸入。\n如需修改，請先到「出勤記錄」刪除原本那筆再重新登錄。`);
         return;
@@ -654,6 +665,7 @@
       await msg.info("儲存完成", flag === "ot" ? `已儲存：⚠ 判定需送出${this.L.otFormLabel(rec, shift)}（加班約 ${C.hr(r.otHours || r.actualHours)} 小時）`
         : flag === "leave" ? `已儲存：⚠ 判定需送出請假單（缺少 ${C.hr(r.shortfall)} 小時）` : "已儲存：✅ 工時正常");
       this.fNote.value = "";
+      this.entrySegments.forEach((s) => { s.forgotIn.checked = false; s.forgotOut.checked = false; });
       this.refreshRecordsFilters(); this.refreshReportMonth(); this.updatePreview();
     }
 
@@ -700,7 +712,7 @@
         if (ff !== "全部狀態" && C.STATUS_MAP[flag] !== ff) continue;
         let status = C.STATUS_MAP[flag];
         if (flag === "ot" && r.flag !== "ot") status += "（休假出勤）";
-        rows.push({ key: rec.id, cls: "c-" + flag, status, cells: [rec.date, emp.name, DAYTYPE_LABEL[rec.dayType], this.L.formatShiftCell(rec.empId, rec.date, shift), C.formatSegmentsText(rec, " / "), C.pf(rec.scheduledHours), C.hr(r.actualHours), status, this.can("records") ? "🗑" : ""] });
+        rows.push({ key: rec.id, cls: "c-" + flag, status, cells: [rec.date, emp.name, DAYTYPE_LABEL[rec.dayType], this.L.formatShiftCell(rec.empId, rec.date, shift), C.formatSegmentsText(rec, " / ") + (C.getSegments(rec).some((s) => s.forgotIn || s.forgotOut) ? " ⚠忘打卡" : ""), C.pf(rec.scheduledHours), C.hr(r.actualHours), status, this.can("records") ? "🗑" : ""] });
       }
       this.recTree.render(rows, this.recTree.first());
       const ot = rows.filter((x) => x.status.startsWith("需加班單")).length, lv = rows.filter((x) => x.status.startsWith("需請假單")).length, nm = rows.filter((x) => x.status === "正常").length;
