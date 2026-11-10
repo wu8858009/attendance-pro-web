@@ -38,7 +38,26 @@
       }
       await this.loadCalendarBase();
       if (this.store.token) { await this.enter(); return; }
+      if (await this.autoLogin()) return;
       await this.showLogin();
+    }
+    async autoLogin() {                 // 有記住帳號密碼就直接登入；回傳 true 代表已處理完畫面
+      const saved = this.store.remembered();
+      if (!saved || this.store.noAuto || this.autoTried) return false;
+      this.autoTried = true;
+      this.splash("自動登入中…");
+      try {
+        const r = await this.store.loginKey(saved.u, saved.k);
+        if (r.token) { await this.enter(); return true; }
+        if (r.error === "wrong_password") { this.store.forget(); await this.showLogin("記住的密碼已失效，請重新輸入"); return true; }
+      } catch (_e) { /* 連線失敗就顯示登入畫面 */ }
+      return false;
+    }
+    async confirmLogout() {
+      const warn = this.store.dirty ? "\n還有資料正在上傳，現在登出這些修改會遺失。" : "";
+      if (!(await msg.ask("登出", `確定要登出嗎？${warn}`))) return;
+      await this.store.logout();
+      location.reload();
     }
     async loadCalendarBase() {
       try { this.calendar = await (await fetch("data/taiwan_calendar.json")).json(); } catch (_e) { this.calendar = {}; }
@@ -60,19 +79,31 @@
         return;
       }
       const setup = st.needsSetup;
-      const user = setup ? null : h("input", { type: "text", autocomplete: "username", placeholder: "帳號", value: localStorage.getItem("att_user") || "" });
-      const pw = h("input", { type: "password", autocomplete: setup ? "new-password" : "current-password", placeholder: "密碼" });
+      let saved = setup ? null : this.store.remembered();
+      const user = setup ? null : h("input", { type: "text", autocomplete: "username", placeholder: "帳號", value: saved ? saved.u : (localStorage.getItem("att_user") || "") });
+      const pw = h("input", { type: "password", autocomplete: setup ? "new-password" : "current-password", placeholder: saved ? "已記住密碼，可直接按登入" : "密碼" });
+      const forgetSaved = () => { saved = null; this.store.forget(); pw.placeholder = "密碼"; };
+      const keep = setup ? null : h("input", { type: "checkbox", checked: !!saved, onchange: () => { if (!keep.checked) forgetSaved(); } });
       const pw2 = setup ? h("input", { type: "password", autocomplete: "new-password", placeholder: "再輸入一次密碼" }) : null;
       const err = h("div", { class: "err", text: notice || "", style: { minHeight: "20px", margin: "6px 0" } });
       const go = U.primary(setup ? "設定密碼並開始使用" : "登入", null, { class: "btn primary taller" });
       const submit = async () => {
         if (setup && pw.value.length < 8) { err.textContent = "密碼至少 8 個字元"; return; }
         if (setup && pw.value !== pw2.value) { err.textContent = "兩次輸入的密碼不一致"; return; }
-        if (!pw.value || (user && !user.value.trim())) { err.textContent = "請輸入帳號與密碼"; return; }
+        const name = user ? user.value.trim() : "";
+        const useSaved = !!saved && !pw.value && name.toLowerCase() === saved.u.toLowerCase();
+        if (!setup && (!name || (!pw.value && !useSaved))) { err.textContent = "請輸入帳號與密碼"; return; }
+        if (setup && !pw.value) return;
         go.disabled = true; err.textContent = setup ? "設定中…" : "登入中…";
         try {
-          const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.login(user.value.trim(), pw.value, st.salt);
-          if (r.token) { if (user) localStorage.setItem("att_user", user.value.trim()); await this.enter(); return; }
+          const key = setup ? "" : (useSaved ? saved.k : await this.store.keyFor(pw.value, st.salt));
+          const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.loginKey(name, key);
+          if (r.token) {
+            if (user) { localStorage.setItem("att_user", name); if (keep.checked) this.store.remember(name, key); else this.store.forget(); }
+            await this.enter();
+            return;
+          }
+          if (r.error === "wrong_password" && useSaved) { forgetSaved(); keep.checked = false; err.textContent = "記住的密碼已失效，請重新輸入"; go.disabled = false; pw.focus(); return; }
           err.textContent = { wrong_password: "帳號或密碼錯誤", locked: "錯誤次數過多，請 10 分鐘後再試", already_setup: "密碼已設定過，請重新整理後登入" }[r.error] || "登入失敗";
         } catch (_e) { err.textContent = "連線失敗，請再試一次"; }
         go.disabled = false;
@@ -80,7 +111,8 @@
       go.addEventListener("click", submit);
       const form = h("div", { class: "pad" },
         h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : "請輸入帳號與密碼" }))),
-        user ? h("div", { class: "mb8" }, user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null, err, go);
+        user ? h("div", { class: "mb8" }, user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null,
+        keep ? h("label", { class: "check" }, keep, "記住帳號密碼，下次自動登入（公用電腦請勿勾選）") : null, err, go);
       form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
       clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));
       (user && !user.value ? user : pw).focus();
@@ -116,7 +148,7 @@
       this.splash("讀取 Google 試算表資料…");
       try { await this.store.load(); }
       catch (e) {
-        if (e.message === "auth") { await this.showLogin("登入已過期，請重新登入"); return; }
+        if (e.message === "auth") { if (!(await this.autoLogin())) await this.showLogin("登入已過期，請重新登入"); return; }
         if (e.message === "must_change") { this.showForceChange(); return; }
         this.splashText.textContent = "讀取資料失敗，請檢查網路後重新整理。";
         return;
@@ -149,7 +181,8 @@
       const hdr = h("div", { class: "hdr" },
         h("div", { class: "hdr-left" }, this.burger, h("div", { class: "logo", text: "⏱" }),
           h("div", {}, h("div", { class: "hdr-title" }, "員工出勤管理系統", h("span", { class: "pro", text: "PRO" })), h("div", { class: "hdr-sub", text: "Enterprise Attendance & Overtime Console" }))),
-        h("div", { class: "hdr-right" }, h("div", { class: "hdr-date", text: `📅 ${C.todayIso()}（星期${wd}）` }), h("div", { class: "hdr-note", text: `👤 ${this.me.name || this.me.username}　內部行政試算輔助工具` })));
+        h("div", { class: "hdr-right" }, h("div", { class: "hdr-date", text: `📅 ${C.todayIso()}（星期${wd}）` }), h("div", { class: "hdr-note", text: "內部行政試算輔助工具" }),
+          h("div", { class: "hdr-user" }, h("span", { text: `👤 ${this.me.name || this.me.username}` }), U.ghost("登出", () => this.confirmLogout()))));
 
       this.navList = h("div", {});
       this.sidebar = h("div", { class: "sidebar" }, h("div", { class: "side-h", text: "功能選單" }), h("div", { class: "side-s", text: "拖曳項目可調整順序" }),

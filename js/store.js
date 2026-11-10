@@ -4,7 +4,7 @@
   "use strict";
   const C = window.Core;
   const COLS = ["employees", "records", "leaveLedger", "shiftSchedule"];
-  const LS_TOKEN = "att_token", LS_PENDING = "att_pending", LS_PREFS = "att_prefs";
+  const LS_TOKEN = "att_token", LS_PENDING = "att_pending", LS_PREFS = "att_prefs", LS_REMEMBER = "att_remember", LS_NO_AUTO = "att_no_auto";
   const PREF_KEYS = ["navOrder", "appearanceMode", "scheduleCellFontSize"];   // 沒有軟體設定權限時，這幾項只存在自己的裝置
   const POLL_MS = 4000;
 
@@ -62,20 +62,31 @@
       return r;
     }
     keyFor(password, salt) { return deriveKey(password, salt); }
-    async login(username, password, salt) {
-      const r = await this.call("login", { username, key: await deriveKey(password, salt) });
-      if (r.token) this.setToken(r.token);
+    async loginKey(username, key) {
+      const r = await this.call("login", { username, key });
+      if (r.token) { this.setToken(r.token); localStorage.removeItem(LS_NO_AUTO); }
       return r;
     }
+    // 記住帳號密碼：只存瀏覽器算出來的金鑰，不存密碼原文
+    remembered() { try { return JSON.parse(localStorage.getItem(LS_REMEMBER) || "null"); } catch (_e) { return null; } }
+    remember(u, k) { localStorage.setItem(LS_REMEMBER, JSON.stringify({ u, k })); }
+    forget() { localStorage.removeItem(LS_REMEMBER); localStorage.removeItem(LS_NO_AUTO); }
+    get noAuto() { return !!localStorage.getItem(LS_NO_AUTO); }
     async changePassword(oldPw, newPw, salt) {
-      const r = await this.call("changePassword", { key: await deriveKey(oldPw, salt), newKey: await deriveKey(newPw, salt) });
-      if (r.token) this.setToken(r.token);
+      const key = await deriveKey(oldPw, salt), newKey = await deriveKey(newPw, salt);
+      const r = await this.call("changePassword", { key, newKey });
+      if (r.token) {
+        this.setToken(r.token);
+        const saved = this.remembered();
+        if (saved && saved.k === key) this.remember(saved.u, newKey);   // 記住的密碼跟著更新
+      }
       return r;
     }
     async logout() {
       try { await this.call("logout"); } catch (_e) { /* 離線時也要能登出 */ }
       this.setToken("");
       localStorage.removeItem(LS_PENDING);
+      if (this.remembered()) localStorage.setItem(LS_NO_AUTO, "1");     // 主動登出後不要又自動登入回去
     }
 
     // ---- 載入 ----

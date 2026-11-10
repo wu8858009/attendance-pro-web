@@ -238,7 +238,7 @@ input[type=range] { width: 100%; accent-color: var(--teal); }
 @media (max-width: 760px) {
   .burger { display: block; }
   .hdr { padding: 0 10px; }
-  .hdr-right, .hdr-sub { display: none; }
+  .hdr-date, .hdr-note, .hdr-sub, .hdr-user span { display: none; }
   .body { padding: 8px; }
   .sidebar { position: fixed; z-index: 60; top: 0; bottom: 0; left: 0; width: 230px; border-radius: 0; transform: translateX(-105%); transition: transform .18s; padding-top: env(safe-area-inset-top); }
   .sidebar.open { transform: none; box-shadow: 0 0 40px #000a; }
@@ -263,3 +263,6 @@ input[type=range] { width: 100%; accent-color: var(--teal); }
 .tab.ro .wr, .tab.ro .ord, .tab.ro .off-b, .tab.ro .tag-chip button { display: none !important; }
 .tab.ro .sg .cell { cursor: default; }
 .perm-grid { display: grid; grid-template-columns: 1fr 150px; gap: 6px 12px; align-items: center; }
+.hdr-user { display: flex; align-items: center; gap: 8px; margin-top: 2px; justify-content: flex-end; font-size: 12px; white-space: nowrap; }
+.hdr-user .btn { height: 24px; padding: 0 10px; }
+.login .check { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 2px 0; }
