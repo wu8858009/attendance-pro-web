@@ -36,6 +36,7 @@
     // ---- 啟動與登入 ----
     static boot() { window.app = new App(); window.app.start(); }
     async start() {
+      this.startUpdateCheck();
       if (!window.CONFIG.CLOUD_URL) {
         clear(this.root()).append(h("div", { class: "center" }, "尚未設定後端網址（js/config.js 的 CLOUD_URL）"));
         return;
@@ -44,6 +45,42 @@
       if (this.store.token) { await this.enter(); return; }
       if (await this.autoLogin()) return;
       await this.showLogin();
+    }
+    // ---- 自動更新：GitHub Pages 的頁面會被快取約 10 分鐘，這裡主動比對各檔案的版本號，閒置時重新載入 ----
+    assetSig(list) { return list.filter((x) => /^(js|css)\//.test(x)).sort().join("|"); }
+    startUpdateCheck() {
+      const here = new URL(location.href);
+      if (here.searchParams.has("u")) { here.searchParams.delete("u"); history.replaceState(null, "", here); }
+      const mine = this.assetSig(Array.from(document.querySelectorAll("script[src],link[rel=stylesheet]")).map((e) => e.getAttribute("src") || e.getAttribute("href")));
+      let lastInput = 0, lastType = 0, lastCheck = 0, pending = "";
+      for (const ev of ["keydown", "pointerdown"]) document.addEventListener(ev, () => { lastInput = Date.now(); }, true);
+      document.addEventListener("input", () => { lastInput = lastType = Date.now(); }, true);
+      const safe = () => {                // 有對話框、未上傳的資料、或最近操作／打字過就先不更新
+        if (this.store.dirty || this.popup || document.querySelector(".overlay,.float")) return false;
+        const now = Date.now();
+        return now - lastInput >= 60000 && now - lastType >= 600000;
+      };
+      const apply = () => {
+        if (!pending || !safe() || sessionStorage.getItem("att_reloaded") === pending) return;
+        sessionStorage.setItem("att_reloaded", pending);   // 同一版只重載一次，避免快取沒更新時一直重整
+        const u = new URL(location.href);
+        u.searchParams.set("u", String(Date.now()));
+        location.replace(u);
+      };
+      this.checkUpdate = async (force) => {
+        if (pending) { apply(); return; }
+        if (!force && Date.now() - lastCheck < 20000) return;
+        lastCheck = Date.now();
+        try {
+          const text = await (await fetch(`index.html?u=${Date.now()}`, { cache: "no-store" })).text();
+          const sig = this.assetSig(Array.from(text.matchAll(/(?:src|href)="((?:js|css)\/[^"]+)"/g), (m) => m[1]));
+          if (sig && sig !== mine) { pending = sig; apply(); }
+        } catch (_e) { /* 離線：下次再查 */ }
+      };
+      this.checkUpdate(true);
+      setInterval(() => this.checkUpdate(), 15000);
+      window.addEventListener("focus", () => this.checkUpdate());
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) this.checkUpdate(); });
     }
     async autoLogin() {                 // 有記住帳號密碼就直接登入；回傳 true 代表已處理完畫面
       const saved = this.store.remembered();
