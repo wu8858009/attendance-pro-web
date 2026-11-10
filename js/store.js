@@ -55,7 +55,7 @@
       this.token = t;
       if (t) localStorage.setItem(LS_TOKEN, t); else localStorage.removeItem(LS_TOKEN);
     }
-    async status() { return this.call("status"); }
+    async status(names) { return this.call("status", names ? { names: true } : null); }
     async setup(password, salt) {
       const r = await this.call("setup", { key: await deriveKey(password, salt) });
       if (r.token) this.setToken(r.token);

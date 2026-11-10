@@ -73,15 +73,27 @@
     async showLogin(notice) {
       this.splash("連線中…");
       let st;
-      try { st = await this.store.status(); }
+      try { st = await this.store.status(true); }
       catch (_e) {
         this.splashText.textContent = "無法連線到 Google 試算表，請檢查網路後重新整理。";
         return;
       }
       const setup = st.needsSetup;
       let saved = setup ? null : this.store.remembered();
-      const user = setup ? null : h("input", { type: "text", autocomplete: "username", placeholder: "帳號", value: saved ? saved.u : (localStorage.getItem("att_user") || "") });
-      const pw = h("input", { type: "password", autocomplete: setup ? "new-password" : "current-password", placeholder: saved ? "已記住密碼，可直接按登入" : "密碼" });
+      const logins = !setup && st.logins && st.logins.length ? st.logins : null, PICK = "請選擇登入人員";
+      const labelOf = (c) => (c.has ? c.label : `${c.label}（未建立帳號）`);
+      const lastUser = saved ? saved.u : (localStorage.getItem("att_user") || "");
+      const pick = logins ? new U.OptionMenu([PICK].concat(logins.map(labelOf)), () => syncSaved()) : null;
+      const chosen = () => (pick ? logins.find((c) => labelOf(c) === pick.get()) || null : null);
+      const user = setup || pick ? null : h("input", { type: "text", autocomplete: "username", placeholder: "帳號", value: lastUser });   // 讀不到名單時才用打字的
+      const nameNow = () => (pick ? ((chosen() || {}).u || "") : (user ? user.value.trim() : ""));
+      if (pick) {
+        const c = logins.find((x) => x.has && x.u.toLowerCase() === lastUser.toLowerCase());
+        pick.set(c ? labelOf(c) : PICK);
+      }
+      const syncSaved = () => { pw.placeholder = saved && nameNow().toLowerCase() === saved.u.toLowerCase() ? "已記住密碼，可直接按登入" : "密碼"; };
+      const pw = h("input", { type: "password", autocomplete: setup ? "new-password" : "current-password", placeholder: "密碼" });
+      syncSaved();
       const forgetSaved = () => { saved = null; this.store.forget(); pw.placeholder = "密碼"; };
       const keep = setup ? null : h("input", { type: "checkbox", checked: !!saved, onchange: () => { if (!keep.checked) forgetSaved(); } });
       const pw2 = setup ? h("input", { type: "password", autocomplete: "new-password", placeholder: "再輸入一次密碼" }) : null;
@@ -90,7 +102,12 @@
       const submit = async () => {
         if (setup && pw.value.length < 8) { err.textContent = "密碼至少 8 個字元"; return; }
         if (setup && pw.value !== pw2.value) { err.textContent = "兩次輸入的密碼不一致"; return; }
-        const name = user ? user.value.trim() : "";
+        const name = nameNow();
+        if (pick) {
+          const c = chosen();
+          if (!c) { err.textContent = "請選擇登入人員"; return; }
+          if (!c.has) { err.textContent = "這位員工還沒有帳號，請管理員到「🔐 帳號權限」建立"; return; }
+        }
         const useSaved = !!saved && !pw.value && name.toLowerCase() === saved.u.toLowerCase();
         if (!setup && (!name || (!pw.value && !useSaved))) { err.textContent = "請輸入帳號與密碼"; return; }
         if (setup && !pw.value) return;
@@ -99,7 +116,7 @@
           const key = setup ? "" : (useSaved ? saved.k : await this.store.keyFor(pw.value, st.salt));
           const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.loginKey(name, key);
           if (r.token) {
-            if (user) { localStorage.setItem("att_user", name); if (keep.checked) this.store.remember(name, key); else this.store.forget(); }
+            if (!setup) { localStorage.setItem("att_user", name); if (keep.checked) this.store.remember(name, key); else this.store.forget(); }
             await this.enter();
             return;
           }
@@ -110,8 +127,8 @@
       };
       go.addEventListener("click", submit);
       const form = h("div", { class: "pad" },
-        h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : "請輸入帳號與密碼" }))),
-        user ? h("div", { class: "mb8" }, user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null,
+        h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : pick ? "請選擇人員並輸入密碼" : "請輸入帳號與密碼" }))),
+        pick || user ? h("div", { class: "mb8" }, pick || user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null,
         keep ? h("label", { class: "check" }, keep, "記住帳號密碼，下次自動登入（公用電腦請勿勾選）") : null, err, go);
       form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
       clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));

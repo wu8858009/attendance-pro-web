@@ -75,11 +75,26 @@ function withLock_(fn) {
 }
 
 // ---- 密碼：瀏覽器先用 PBKDF2 算出 key（salt 由這裡發），這裡只存 key 的雜湊 ----
-function status_() {
+function status_(req) {
   var p = props_();
   var salt = p.getProperty("salt");
   if (!salt) { salt = randomToken_(); p.setProperty("salt", salt); }
-  return { needsSetup: !p.getProperty("pwHash"), salt: salt };
+  var out = { needsSetup: !p.getProperty("pwHash"), salt: salt };
+  if (req && req.names && !out.needsSetup) out.logins = loginChoices_();
+  return out;
+}
+function loginChoices_() {              // 登入畫面的下拉選單：管理員、幹部，加上目前在職的員工
+  var all = accounts_(), byEmp = {}, out = [];
+  Object.keys(all).sort().forEach(function (k) {
+    var a = all[k];
+    if (a.empId) byEmp[a.empId] = a;
+    else if (a.admin) out.unshift({ u: a.u, label: "管理員（" + a.u + "）", has: true });
+    else out.push({ u: a.u, label: a.name + "（幹部）", has: true });
+  });
+  readAll_("employees").filter(function (e) { return e.isActive !== false; })
+    .sort(function (a, b) { return (a.scheduleOrder === undefined ? 9999 : a.scheduleOrder) - (b.scheduleOrder === undefined ? 9999 : b.scheduleOrder); })
+    .forEach(function (e) { var a = byEmp[e.id]; out.push({ u: a ? a.u : "", label: e.name, has: !!a }); });
+  return out;
 }
 function hashKey_(salt, key) { return sha_(salt + ":" + key); }
 function accKey_(u) { return "acc_" + sha_(u); }
