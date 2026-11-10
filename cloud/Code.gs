@@ -11,6 +11,11 @@ var SHEETS = {
   settings: { name: "設定", head: ["id", "data"] }
 };
 var COLLECTIONS = Object.keys(SHEETS);
+var AUDIT_SHEET = "操作紀錄", AUDIT_HEAD = ["時間", "帳號", "姓名", "動作", "內容"], AUDIT_MAX = 20000, AUDIT_TRIM = 2000;
+var AUDIT_LOGIN = { "登入": 1, "自動登入": 1, "開啟系統": 1 };
+var AUDIT_KINDS = { login: ["登入", "自動登入", "開啟系統", "登入失敗", "登出"], data: ["資料異動", "還原備份"], account: ["帳號管理", "改密碼"] };
+var COL_LABEL = { employees: "員工", records: "出勤紀錄", leaveLedger: "假別紀錄", shiftSchedule: "排班", nameGlyphs: "姓名字形", settings: "設定" };
+var SETTING_LABEL = { navOrder: "選單順序", appearanceMode: "外觀模式", scheduleCellFontSize: "班表字體大小", shiftNoteTags: "時段備註標籤", otMonthlyCap: "月加班上限", otMonthlyCapExtended: "月加班延長上限", defaultBreakMin: "預設休息時間" };
 var SESSION_DAYS = 30;
 var SESSIONS_VALID_AFTER = 1794274011408;   // 這個時間以前發出的登入全部失效，要重新輸入帳號密碼
 var CELL_LIMIT = 49000;
@@ -43,12 +48,12 @@ function doPost(e) {
     if (req.action === "rev") return json_(rev_());       // 幾秒一次，不讀帳號資料
     var acc = accounts_()[user];
     if (!acc) return json_({ error: "auth" });
-    if (req.action === "logout") return json_(logout_(req));
+    if (req.action === "logout") return json_(logout_(req, acc));
     if (req.action === "changePassword") return json_(changePassword_(req, acc));
     if (acc.must) return json_({ error: "must_change" });
-    var priv = { load: load_, apply: apply_, lawCheck: lawCheck_ };
+    var priv = { load: load_, apply: apply_, lawCheck: lawCheck_, audit: auditOpen_ };
     if (priv[req.action]) return json_(priv[req.action](req, acc));
-    var adminOnly = { restore: restore_, accountsList: accountsList_, accountSave: accountSave_, accountsBatch: accountsBatch_, accountReset: accountReset_, accountDelete: accountDelete_ };
+    var adminOnly = { restore: restore_, accountsList: accountsList_, accountSave: accountSave_, accountsBatch: accountsBatch_, accountReset: accountReset_, accountDelete: accountDelete_, auditList: auditList_ };
     if (!adminOnly[req.action]) return json_({ error: "unknown_action" });
     if (!acc.admin) return json_({ error: "forbidden" });
     return json_(adminOnly[req.action](req, acc));
@@ -192,12 +197,15 @@ function login_(req) {
   var acc = accounts_()[user];
   if (!req.key || !acc || !same_(hashKey_(acc.s, req.key), acc.h)) {
     cache.put(failKey, String(fails + 1), 600);
+    if (acc) audit_(acc, "登入失敗", "");                // 不存在的帳號不記，避免被灌爆
     return { error: "wrong_password" };
   }
   cache.remove(failKey);
+  audit_(acc, req.auto ? "自動登入" : "登入", "");
   return { token: issueToken_(user), mustChange: !!acc.must };
 }
-function logout_(req) {
+function logout_(req, acc) {
+  audit_(acc, "登出", "");
   var hash = sha_(String(req.token));
   props_().deleteProperty("tok_" + hash);
   CacheService.getScriptCache().remove("tk2_" + hash);
@@ -211,6 +219,7 @@ function changePassword_(req, acc) {
   if (acc.admin) props_().setProperty("pwHash", hashKey_(props_().getProperty("salt"), req.newKey));
   putAccount_(acc);
   revokeTokens_(acc.u);                                  // 這個帳號的其他裝置全部登出
+  audit_(acc, "改密碼", "");
   return { token: issueToken_(acc.u) };
 }
 
@@ -233,7 +242,7 @@ function accountsList_() {
   var all = accounts_();
   return { accounts: Object.keys(all).map(function (k) { return publicAcc_(all[k]); }) };
 }
-function accountSave_(req) {
+function accountSave_(req, admin) {
   return withLock_(function () {
     var all = accounts_(), u = normUser_(req.username), a = all[u];
     if (req.isNew) {
@@ -250,10 +259,11 @@ function accountSave_(req) {
       a.perms = normPerms_(req.perms, a.empId);
     }
     putAccount_(a);
+    audit_(admin, "帳號管理", (req.isNew ? "新增帳號：" : "修改權限：") + a.u);
     return { rev: bump_() };                             // 版本號變動，對方的畫面幾秒內跟著更新權限
   });
 }
-function accountsBatch_(req) {
+function accountsBatch_(req, admin) {
   return withLock_(function () {
     var all = accounts_(), made = [], skipped = [], batch = {};
     (req.list || []).forEach(function (item) {
@@ -264,11 +274,11 @@ function accountsBatch_(req) {
       batch[accKey_(a.u)] = JSON.stringify(a);
       made.push(a.u);
     });
-    if (made.length) { props_().setProperties(batch); CacheService.getScriptCache().remove("accounts"); }
+    if (made.length) { props_().setProperties(batch); CacheService.getScriptCache().remove("accounts"); audit_(admin, "帳號管理", "批次建立 " + made.length + " 個帳號"); }
     return { made: made, skipped: skipped, rev: bump_() };
   });
 }
-function accountReset_(req) {
+function accountReset_(req, admin) {
   return withLock_(function () {
     var a = accounts_()[normUser_(req.username)];
     if (!a) return { error: "not_found" };
@@ -278,10 +288,11 @@ function accountReset_(req) {
     a.must = true;
     putAccount_(a);
     revokeTokens_(a.u);
+    audit_(admin, "帳號管理", "重設密碼：" + a.u);
     return { ok: true };
   });
 }
-function accountDelete_(req) {
+function accountDelete_(req, admin) {
   return withLock_(function () {
     var a = accounts_()[normUser_(req.username)];
     if (!a) return { error: "not_found" };
@@ -289,6 +300,7 @@ function accountDelete_(req) {
     props_().deleteProperty(accKey_(a.u));
     CacheService.getScriptCache().remove("accounts");
     revokeTokens_(a.u);
+    audit_(admin, "帳號管理", "刪除帳號：" + a.u);
     return { rev: bump_() };
   });
 }
@@ -383,8 +395,14 @@ function load_(req, acc) {
   return out;
 }
 
+function viewText_(c, view) {      // 操作紀錄裡這筆資料的簡短說明
+  var v = view || [];
+  var pick = { records: [0, 1, 3], leaveLedger: [0, 1, 2, 3], shiftSchedule: [0, 1, 2], employees: [1], nameGlyphs: [0] }[c] || [];
+  return pick.map(function (i) { return v[i]; }).filter(function (x) { return x !== "" && x !== undefined; }).join(" ");
+}
 function applyCollection_(c, ops) {
-  if (!ops || (!(ops.upsert || []).length && !(ops.del || []).length)) return;
+  var result = { add: [], upd: [], del: [] };
+  if (!ops || (!(ops.upsert || []).length && !(ops.del || []).length)) return result;
   var sh = sheet_(c), n = SHEETS[c].head.length, last = sh.getLastRow();
   var ids = last >= 2 ? sh.getRange(2, 1, last - 1, 1).getValues() : [];
   var rowOf = {};
@@ -392,6 +410,8 @@ function applyCollection_(c, ops) {
   var fresh = [];
   (ops.upsert || []).forEach(function (item) {
     var row = toRow_(c, item), at = rowOf[String(item.id)];
+    var text = c === "settings" ? (SETTING_LABEL[item.id] || item.id) : viewText_(c, item.view);
+    if (item.id !== "__lawCache") (at ? result.upd : result.add).push(text);
     if (at) sh.getRange(at, 1, 1, n).setValues([row]);
     else { fresh.push(row); rowOf[String(item.id)] = -1; }
   });
@@ -399,19 +419,36 @@ function applyCollection_(c, ops) {
     sh.getRange(last + 1, 1, fresh.length, n).setNumberFormat("@").setValues(fresh);
   }
   var rows = (ops.del || []).map(function (id) { return rowOf[String(id)]; }).filter(function (r) { return r > 0; });
+  rows.forEach(function (r, i) {
+    if (i >= 5) { result.del.push(""); return; }           // 只讀前幾筆當說明，其餘只計數
+    var v = sh.getRange(r, 2, 1, Math.max(1, n - 2)).getValues()[0];
+    result.del.push(c === "settings" ? String(sh.getRange(r, 1).getValue()) : viewText_(c, v));
+  });
   rows.sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
+  return result;
+}
+function applySummary_(c, res) {
+  var part = function (word, list) {
+    if (!list.length) return "";
+    var shown = list.slice(0, 5).filter(function (x) { return x; }).join("、");
+    return word + " " + list.length + " 筆" + (shown ? "（" + shown + (list.length > 5 ? " 等" : "") + "）" : "");
+  };
+  var bits = [part("新增", res.add), part("修改", res.upd), part("刪除", res.del)].filter(function (x) { return x; });
+  return bits.length ? COL_LABEL[c] + " " + bits.join("，") : "";
 }
 
 function apply_(req, acc) {
   if (!canApply_(acc, req.ops)) return { error: "forbidden" };
   return withLock_(function () {
     var before = revision_();
-    COLLECTIONS.forEach(function (c) { applyCollection_(c, (req.ops || {})[c]); });
+    var notes = [];
+    COLLECTIONS.forEach(function (c) { var s = applySummary_(c, applyCollection_(c, (req.ops || {})[c])); if (s) notes.push(s); });
+    if (notes.length) audit_(acc, "資料異動", notes.join("；").slice(0, 2000));
     return { rev: bump_(), prevRev: before };
   });
 }
 
-function restore_(req) {           // 整份覆蓋：從備份還原、第一次匯入桌面版資料
+function restore_(req, acc) {           // 整份覆蓋：從備份還原、第一次匯入桌面版資料
   return withLock_(function () {
     ensureSheets_();
     COLLECTIONS.forEach(function (c) {
@@ -420,8 +457,44 @@ function restore_(req) {           // 整份覆蓋：從備份還原、第一次
       var rows = ((req.data || {})[c] || []).map(function (item) { return toRow_(c, item); });
       if (rows.length) sh.getRange(2, 1, rows.length, n).setNumberFormat("@").setValues(rows);
     });
+    audit_(acc, "還原備份", "從備份檔覆蓋全部資料");
     return { rev: bump_() };
   });
+}
+
+// ---- 操作紀錄：只有管理員看得到；寫入失敗不影響原本的動作 ----
+function auditNow_() { return Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd HH:mm:ss"); }
+function auditTime_(v) { return v instanceof Date ? Utilities.formatDate(v, "Asia/Taipei", "yyyy-MM-dd HH:mm:ss") : String(v); }
+function auditSheet_() {
+  var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(AUDIT_SHEET);
+  if (sh) return sh;
+  sh = ss.insertSheet(AUDIT_SHEET);
+  sh.getRange(1, 1, sh.getMaxRows(), AUDIT_HEAD.length).setNumberFormat("@");
+  sh.getRange(1, 1, 1, AUDIT_HEAD.length).setValues([AUDIT_HEAD]).setFontWeight("bold");
+  sh.setFrozenRows(1);
+  return sh;
+}
+function audit_(acc, action, detail) {
+  try {
+    var sh = auditSheet_();
+    sh.appendRow([auditNow_(), safe_(acc.u), safe_(acc.name), action, safe_(detail || "")]);
+    if (sh.getLastRow() > AUDIT_MAX + 1) sh.deleteRows(2, AUDIT_TRIM);     // 超過上限時刪掉最舊的一批
+  } catch (e) { console.warn("audit failed: " + e); }
+}
+function auditOpen_(req, acc) { audit_(acc, "開啟系統", ""); return { ok: true }; }
+function auditList_(req) {
+  var sh = auditSheet_(), last = sh.getLastRow(), rows = last >= 2 ? sh.getRange(2, 1, last - 1, AUDIT_HEAD.length).getValues() : [];
+  var all = accounts_(), sum = {}, kinds = AUDIT_KINDS[req.kind] || null, out = [], matched = 0;
+  Object.keys(all).forEach(function (k) { sum[k] = { username: all[k].u, name: all[k].name, lastLogin: "", lastAction: "", logins: 0 }; });
+  rows.forEach(function (r) {
+    var t = auditTime_(r[0]), u = String(r[1]), action = String(r[3]), s = sum[u], day = t.slice(0, 10);
+    if (s && AUDIT_LOGIN[action]) { s.lastLogin = t; s.logins++; }
+    if (s && (AUDIT_KINDS.data.indexOf(action) >= 0 || AUDIT_KINDS.account.indexOf(action) >= 0)) s.lastAction = t;
+    if ((req.user && u !== req.user) || (kinds && kinds.indexOf(action) < 0) || (req.from && day < req.from) || (req.to && day > req.to)) return;
+    matched++;
+    out.push({ time: t, username: u, name: String(r[2]), action: action, detail: String(r[4]) });
+  });
+  return { rows: out.reverse().slice(0, 1000), matched: matched, summary: Object.keys(sum).map(function (k) { return sum[k]; }) };
 }
 
 // ---- 法規異動偵測：瀏覽器不能跨網域讀法務部頁面，由這裡抓 ----

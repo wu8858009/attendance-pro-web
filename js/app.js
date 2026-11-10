@@ -9,7 +9,7 @@
   const NAV_DEFS = [
     ["📊 月報表", "📊", "月報表"], ["✏️ 打卡登錄", "✏️", "打卡登錄"], ["📋 出勤記錄", "📋", "出勤記錄"], ["👥 員工設定", "👥", "員工設定"],
     ["🗓️ 排班班表", "🗓️", "排班班表"], ["🌴 特休/補休", "🌴", "特休/補休"], ["📖 勞工局說明", "📖", "勞工局說明"], ["🛠️ 軟體設定", "🛠️", "軟體設定"],
-    ["📘 使用說明書", "📘", "使用說明書"], ["🏮 農民曆", "🏮", "農民曆"], ["🔐 帳號權限", "🔐", "帳號權限"],
+    ["📘 使用說明書", "📘", "使用說明書"], ["🏮 農民曆", "🏮", "農民曆"], ["🔐 帳號權限", "🔐", "帳號權限"], ["🧾 登入操作紀錄", "🧾", "登入操作紀錄"],
   ];
   // 各分頁對應的權限項目；沒列出的分頁（說明、農民曆、帳號）每個人都能開
   const NAV_MOD = { "📊 月報表": "report", "✏️ 打卡登錄": "punch", "📋 出勤記錄": "records", "👥 員工設定": "employees", "🗓️ 排班班表": "schedule", "🌴 特休/補休": "leave", "🛠️ 軟體設定": "settings" };
@@ -27,7 +27,11 @@
     get me() { return this.store.me || { perms: {}, admin: false, name: "", username: "" }; }
     perm(m) { return this.me.perms[m] || "none"; }
     can(m) { return this.perm(m) === "edit"; }
-    tabAllowed(n) { const m = NAV_MOD[n]; return !m || this.perm(m) !== "none"; }
+    tabAllowed(n) {
+      if (n === "🧾 登入操作紀錄") return !!this.me.admin;
+      const m = NAV_MOD[n];
+      return !m || this.perm(m) !== "none";
+    }
 
     // ---- 啟動與登入 ----
     static boot() { window.app = new App(); window.app.start(); }
@@ -47,7 +51,7 @@
       this.autoTried = true;
       this.splash("自動登入中…");
       try {
-        const r = await this.store.loginKey(saved.u, saved.k);
+        const r = await this.store.loginKey(saved.u, saved.k, true);
         if (r.token) { this.loginCred = { pw: "", k: saved.k }; await this.enter(); return true; }
         if (r.error === "wrong_password") { this.store.forget(); await this.showLogin("記住的密碼已失效，請重新輸入"); return true; }
       } catch (_e) { /* 連線失敗就顯示登入畫面 */ }
@@ -176,6 +180,7 @@
         this.splashText.textContent = "讀取資料失敗，請檢查網路後重新整理。";
         return;
       }
+      if (!this.loginCred) this.store.call("audit").catch(() => {});   // 沿用之前的登入狀態打開，也算一次使用紀錄
       this.loginCred = null;
       this.L.db = this.store.db;
       this.store.onStatus = () => this.refreshFooter();
@@ -190,7 +195,7 @@
       this.buildShell();
       document.body.dataset.mode = this.db.settings.appearanceMode;
       this.buildEntryTab(); this.buildRecordsTab(); this.buildEmployeesTab(); this.buildScheduleTab(); this.buildLeaveTab();
-      this.buildReportTab(); this.buildHelpTab(); this.buildSettingsTab(); this.buildManualTab(); this.buildAlmanacTab(); this.buildAccountTab();
+      this.buildReportTab(); this.buildHelpTab(); this.buildSettingsTab(); this.buildManualTab(); this.buildAlmanacTab(); this.buildAccountTab(); this.buildAuditTab();
       for (const [n] of NAV_DEFS) if (NAV_MOD[n] && !this.can(NAV_MOD[n])) this.tabs[n].classList.add("ro");
       this.selectTab(this.navOrder.includes("✏️ 打卡登錄") ? "✏️ 打卡登錄" : this.navOrder.find((n) => NAV_MOD[n]) || this.navOrder[0]);
       this.refreshAll();
@@ -277,6 +282,7 @@
       else if (n === "🛠️ 軟體設定") this.loadSettingsIntoForm();
       else if (n === "🏮 農民曆") this.renderAlmanac();
       else if (n === "🔐 帳號權限") this.renderAccounts();
+      else if (n === "🧾 登入操作紀錄") this.renderAudit();
     }
     refreshAll() {
       this.refreshEmployeeCombos(); this.refreshRecordsFilters(); this.renderEmployees(); this.renderRecords(); this.renderScheduleGrid();

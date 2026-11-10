@@ -62,8 +62,8 @@
       return r;
     }
     keyFor(password, salt) { return deriveKey(password, salt); }
-    async loginKey(username, key) {
-      const r = await this.call("login", { username, key });
+    async loginKey(username, key, auto) {
+      const r = await this.call("login", { username, key, auto: !!auto });
       if (r.token) { this.setToken(r.token); localStorage.removeItem(LS_NO_AUTO); }
       return r;
     }
