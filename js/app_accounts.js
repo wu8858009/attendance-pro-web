@@ -30,7 +30,7 @@
       };
       const role = me.admin ? "管理員" : me.empId ? "員工（只看得到自己的資料）" : "幹部";
       t.append(U.accentCard(X.purple, h("div", { class: "pad" }, U.sectionHeader("🔐", "我的帳號", `帳號：${me.username}　姓名：${me.name}　身分：${role}`),
-        h("div", { class: "grid4 mb8" }, h("div", {}, pwOld), h("div", {}, pwNew), U.primary("更新密碼", changePw, { class: "btn primary" }), U.ghost("登出這台裝置", () => this.confirmLogout())))));
+        h("div", { class: "grid4 mb8" }, h("div", {}, U.pwBox(pwOld)), h("div", {}, U.pwBox(pwNew)), U.primary("更新密碼", changePw, { class: "btn primary" }), U.ghost("登出這台裝置", () => this.confirmLogout())))));
       if (!me.admin) return;
       this.accTree = new U.Table([
         { key: "user", title: "帳號", width: 130 }, { key: "name", title: "姓名", width: 100 }, { key: "role", title: "身分", width: 70 },

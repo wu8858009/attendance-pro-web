@@ -72,8 +72,8 @@
     remember(u, k) { localStorage.setItem(LS_REMEMBER, JSON.stringify({ u, k })); }
     forget() { localStorage.removeItem(LS_REMEMBER); localStorage.removeItem(LS_NO_AUTO); }
     get noAuto() { return !!localStorage.getItem(LS_NO_AUTO); }
-    async changePassword(oldPw, newPw, salt) {
-      const key = await deriveKey(oldPw, salt), newKey = await deriveKey(newPw, salt);
+    async changePassword(oldPw, newPw, salt, oldKey) {
+      const key = oldKey || await deriveKey(oldPw, salt), newKey = await deriveKey(newPw, salt);
       const r = await this.call("changePassword", { key, newKey });
       if (r.token) {
         this.setToken(r.token);

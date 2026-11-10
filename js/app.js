@@ -48,7 +48,7 @@
       this.splash("自動登入中…");
       try {
         const r = await this.store.loginKey(saved.u, saved.k);
-        if (r.token) { await this.enter(); return true; }
+        if (r.token) { this.loginCred = { pw: "", k: saved.k }; await this.enter(); return true; }
         if (r.error === "wrong_password") { this.store.forget(); await this.showLogin("記住的密碼已失效，請重新輸入"); return true; }
       } catch (_e) { /* 連線失敗就顯示登入畫面 */ }
       return false;
@@ -116,6 +116,7 @@
           const key = setup ? "" : (useSaved ? saved.k : await this.store.keyFor(pw.value, st.salt));
           const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.loginKey(name, key);
           if (r.token) {
+            this.loginCred = { pw: useSaved ? "" : pw.value, k: key };   // 只留在記憶體，給接下來的改密碼畫面帶入
             if (!setup) { localStorage.setItem("att_user", name); if (keep.checked) this.store.remember(name, key); else this.store.forget(); }
             await this.enter();
             return;
@@ -128,14 +129,15 @@
       go.addEventListener("click", submit);
       const form = h("div", { class: "pad" },
         h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : pick ? "請選擇人員並輸入密碼" : "請輸入帳號與密碼" }))),
-        pick || user ? h("div", { class: "mb8" }, pick || user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null,
+        pick || user ? h("div", { class: "mb8" }, pick || user) : null, h("div", { class: "mb8" }, U.pwBox(pw)), pw2 ? h("div", { class: "mb8" }, U.pwBox(pw2)) : null,
         keep ? h("label", { class: "check" }, keep, "記住帳號密碼，下次自動登入（公用電腦請勿勾選）") : null, err, go);
       form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
       clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));
       (user && !user.value ? user : pw).focus();
     }
     showForceChange() {                 // 暫時密碼第一次登入，要改成自己的密碼才能使用
-      const oldPw = h("input", { type: "password", autocomplete: "current-password", placeholder: "暫時密碼" });
+      const known = this.loginCred || this.store.remembered();   // 剛登入用的暫時密碼自動帶入
+      const oldPw = h("input", { type: "password", autocomplete: "current-password", value: (known && known.pw) || "", placeholder: known && !known.pw ? "暫時密碼已自動帶入" : "暫時密碼" });
       const pw1 = h("input", { type: "password", autocomplete: "new-password", placeholder: "新密碼（至少 8 個字元）" });
       const pw2 = h("input", { type: "password", autocomplete: "new-password", placeholder: "再輸入一次新密碼" });
       const err = h("div", { class: "err", style: { minHeight: "20px", margin: "6px 0" } });
@@ -143,10 +145,14 @@
       const submit = async () => {
         if (pw1.value.length < 8) { err.textContent = "新密碼至少 8 個字元"; return; }
         if (pw1.value !== pw2.value) { err.textContent = "兩次輸入的新密碼不一致"; return; }
+        const autoKey = !oldPw.value && known ? known.k : "";
+        if (!oldPw.value && !autoKey) { err.textContent = "請輸入暫時密碼"; return; }
         if (pw1.value === oldPw.value) { err.textContent = "新密碼不能和暫時密碼相同"; return; }
         go.disabled = true; err.textContent = "更新中…";
         try {
-          const st = await this.store.status(), r = await this.store.changePassword(oldPw.value, pw1.value, st.salt);
+          const st = await this.store.status();
+          if (autoKey && (await this.store.keyFor(pw1.value, st.salt)) === autoKey) { err.textContent = "新密碼不能和暫時密碼相同"; go.disabled = false; return; }
+          const r = await this.store.changePassword(oldPw.value, pw1.value, st.salt, autoKey);
           if (r.token) { await this.enter(); return; }
           err.textContent = r.error === "wrong_password" ? "暫時密碼錯誤" : "更新失敗";
         } catch (_e) { err.textContent = "連線失敗，請再試一次"; }
@@ -155,11 +161,11 @@
       go.addEventListener("click", submit);
       const form = h("div", { class: "pad" },
         h("div", { class: "sec" }, h("div", { class: "badge", text: "🔐" }), h("div", {}, h("div", { class: "sec-t", text: "請設定自己的密碼" }), h("div", { class: "sec-s", text: "這是第一次登入或密碼已被重設，改好才能繼續使用" }))),
-        h("div", { class: "mb8" }, oldPw), h("div", { class: "mb8" }, pw1), h("div", { class: "mb8" }, pw2), err, go,
+        h("div", { class: "mb8" }, U.pwBox(oldPw)), h("div", { class: "mb8" }, U.pwBox(pw1)), h("div", { class: "mb8" }, U.pwBox(pw2)), err, go,
         U.ghost("登出", async () => { await this.store.logout(); location.reload(); }, { style: { marginTop: "8px" } }));
       form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
       clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));
-      oldPw.focus();
+      (known ? pw1 : oldPw).focus();
     }
     async enter() {
       this.splash("讀取 Google 試算表資料…");
@@ -170,6 +176,7 @@
         this.splashText.textContent = "讀取資料失敗，請檢查網路後重新整理。";
         return;
       }
+      this.loginCred = null;
       this.L.db = this.store.db;
       this.store.onStatus = () => this.refreshFooter();
       this.meJson = JSON.stringify(this.store.me);

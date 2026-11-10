@@ -293,5 +293,15 @@
     }
   }
 
-  window.UI = { h, append, clear, COLORS, label, sub, colored, card, accentCard, sectionHeader, btn, primary, ghost, danger, chip, input, OptionMenu, DateEntry, TimeDropdown, TagPicker, modal, msg, Table, download, pickFile, copyText, closePop };
+  function pwBox(input) {                   // 密碼欄右側的顯示／隱藏按鈕
+    const eye = h("button", { class: "pw-eye", type: "button", text: "👁", tabIndex: -1, title: "顯示密碼", onclick: () => {
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      eye.textContent = show ? "🙈" : "👁";
+      eye.title = show ? "隱藏密碼" : "顯示密碼";
+      input.focus();
+    } });
+    return h("div", { class: "pw-box" }, input, eye);
+  }
+  window.UI = { pwBox, h, append, clear, COLORS, label, sub, colored, card, accentCard, sectionHeader, btn, primary, ghost, danger, chip, input, OptionMenu, DateEntry, TimeDropdown, TagPicker, modal, msg, Table, download, pickFile, copyText, closePop };
 })();
