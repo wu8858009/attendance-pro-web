@@ -12,6 +12,7 @@ var SHEETS = {
 };
 var COLLECTIONS = Object.keys(SHEETS);
 var AUDIT_SHEET = "操作紀錄", AUDIT_HEAD = ["時間", "帳號", "姓名", "動作", "內容"], AUDIT_MAX = 20000, AUDIT_TRIM = 2000;
+var ONLINE_ACTIVE_SEC = 15, ONLINE_SEC = 150;           // 15 秒內有連線＝使用中，150 秒內＝背景（背景每分鐘回報一次）
 var AUDIT_LOGIN = { "登入": 1, "自動登入": 1, "開啟系統": 1 };
 var AUDIT_KINDS = { login: ["登入", "自動登入", "開啟系統", "登入失敗", "登出"], data: ["資料異動", "還原備份"], account: ["帳號管理", "改密碼"] };
 var COL_LABEL = { employees: "員工", records: "出勤紀錄", leaveLedger: "假別紀錄", shiftSchedule: "排班", nameGlyphs: "姓名字形", settings: "設定" };
@@ -45,6 +46,8 @@ function doPost(e) {
     if (pub[req.action]) return json_(pub[req.action](req));
     var user = tokenUser_(req.token);
     if (!user) return json_({ error: "auth" });
+    if (req.action === "bye") { CacheService.getScriptCache().remove(seenKey_(user)); return json_({ ok: true }); }   // 關閉視窗
+    touchSeen_(user);
     if (req.action === "rev") return json_(rev_());       // 幾秒一次，不讀帳號資料
     var acc = accounts_()[user];
     if (!acc) return json_({ error: "auth" });
@@ -170,6 +173,7 @@ function tokenUser_(t) {                // 幾秒一次的同步檢查走快取�
 }
 function revokeTokens_(user) {
   var p = props_(), all = p.getProperties(), cache = CacheService.getScriptCache();
+  cache.remove(seenKey_(user));
   Object.keys(all).forEach(function (k) {
     if (k.indexOf("tok_") !== 0 || tokenParts_(all[k]).u !== user) return;
     p.deleteProperty(k);
@@ -206,6 +210,7 @@ function login_(req) {
 }
 function logout_(req, acc) {
   audit_(acc, "登出", "");
+  CacheService.getScriptCache().remove(seenKey_(acc.u));
   var hash = sha_(String(req.token));
   props_().deleteProperty("tok_" + hash);
   CacheService.getScriptCache().remove("tk2_" + hash);
@@ -484,6 +489,19 @@ function audit_(acc, action, detail) {
     if (sh.getLastRow() > AUDIT_MAX + 1) sh.deleteRows(2, AUDIT_TRIM);     // 超過上限時刪掉最舊的一批
   } catch (e) { console.warn("audit failed: " + e); }
 }
+function seenKey_(user) { return "seen_" + sha_(user); }
+function touchSeen_(user) { try { CacheService.getScriptCache().put(seenKey_(user), String(Date.now()), 300); } catch (e) { /* 只影響在線顯示 */ } }
+function onlineMap_(all) {         // { 帳號: "active" | "background" }，沒列出的就是離線
+  var out = {};
+  try {
+    var users = Object.keys(all), got = CacheService.getScriptCache().getAll(users.map(seenKey_)), now = Date.now();
+    users.forEach(function (u) {
+      var t = Number(got[seenKey_(u)] || 0), age = (now - t) / 1000;
+      if (t && age <= ONLINE_SEC) out[u] = age <= ONLINE_ACTIVE_SEC ? "active" : "background";
+    });
+  } catch (e) { console.warn("online failed: " + e); }
+  return out;
+}
 function auditOpen_(req, acc) { audit_(acc, "開啟系統", ""); return { ok: true }; }
 function auditList_(req) {
   var sh = auditSheet_(), last = sh.getLastRow(), rows = last >= 2 ? sh.getRange(2, 1, last - 1, AUDIT_HEAD.length).getValues() : [];
@@ -497,7 +515,7 @@ function auditList_(req) {
     matched++;
     out.push({ time: t, username: u, name: String(r[2]), action: action, detail: String(r[4]) });
   });
-  return { rows: out.reverse().slice(0, 1000), matched: matched, summary: Object.keys(sum).map(function (k) { return sum[k]; }) };
+  return { rows: out.reverse().slice(0, 1000), matched: matched, summary: Object.keys(sum).map(function (k) { return sum[k]; }), online: onlineMap_(all) };
 }
 
 // ---- 法規異動偵測：瀏覽器不能跨網域讀法務部頁面，由這裡抓 ----

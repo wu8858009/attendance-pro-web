@@ -278,8 +278,13 @@
       document.addEventListener("visibilitychange", () => { if (!document.hidden) this.poll(); });
       window.addEventListener("focus", () => this.poll());
       window.addEventListener("online", () => this.poll());
+      window.addEventListener("pagehide", () => { if (this.token) navigator.sendBeacon(this.url, JSON.stringify({ action: "bye", token: this.token })); });
     }
     async poll() {
+      if (document.hidden) {                 // 背景時每分鐘回報一次，讓管理員看得到還開著
+        if (this.token && Date.now() - (this.lastBeat || 0) >= 60000) { this.lastBeat = Date.now(); this.call("rev").catch(() => {}); }
+        return;
+      }
       if (document.hidden || !this.token || this.dirty || this.pulling || this.polling) return;
       this.polling = true;
       try {
