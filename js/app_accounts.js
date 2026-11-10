@@ -6,7 +6,7 @@
   const MODS = [["report", "📊 月報表"], ["punch", "✏️ 打卡登錄"], ["records", "📋 出勤記錄"], ["employees", "👥 員工設定"], ["schedule", "🗓️ 排班班表"], ["leave", "🌴 特休/補休"], ["settings", "🛠️ 軟體設定"]];
   const EMP_MODS = ["report", "records", "schedule", "leave"];
   const LEVEL = { none: "不可用", view: "只能看", edit: "可編輯" }, LEVEL_KEY = { 不可用: "none", 只能看: "view", 可編輯: "edit" };
-  const ERR = { duplicate: "這個帳號名稱已經有人使用", emp_taken: "這位員工已經有帳號了", bad_username: "帳號名稱不可空白，也不可超過 40 字", not_found: "找不到這個帳號，可能已被刪除", forbidden: "沒有權限執行這個動作" };
+  const ERR = { duplicate: "這個帳號名稱已經有人使用", emp_taken: "這位員工已經有帳號了", name_taken: "已經有相同姓名的帳號，不能重複建立", bad_username: "帳號名稱不可空白，也不可超過 40 字", not_found: "找不到這個帳號，可能已被刪除", forbidden: "沒有權限執行這個動作" };
   const EMP_DEFAULT = { schedule: "view", records: "view", leave: "view" };
 
   function tempPassword() {                 // 暫時密碼：避開容易看錯的字元
@@ -118,7 +118,7 @@
       this.openAccountDialog(a);
     },
     async batchCreateEmployees() {
-      const accs = this.accounts || [], usedEmp = new Set(accs.map((a) => a.empId)), usedName = new Set(accs.map((a) => a.username));
+      const accs = this.accounts || [], usedEmp = new Set(accs.map((a) => a.empId)), usedName = new Set(accs.flatMap((a) => [a.username, a.name.trim().toLowerCase()]));
       const todo = this.db.employees.filter((e) => e.isActive !== false && !usedEmp.has(e.id) && !usedName.has(e.name.trim().toLowerCase()));
       if (!todo.length) { await msg.info("提醒", "在職員工都已經有帳號了"); return; }
       if (!(await msg.ask("批次建立帳號", `要替 ${todo.length} 位在職員工建立帳號嗎？\n帳號為員工姓名，預設可看自己的排班、出勤記錄、特休／補休。\n每人會產生一組不同的暫時密碼，只會顯示這一次。`))) return;

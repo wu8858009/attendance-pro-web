@@ -83,17 +83,27 @@ function status_(req) {
   if (req && req.names && !out.needsSetup) out.logins = loginChoices_();
   return out;
 }
+function nameKey_(n) { return String(n || "").trim().toLowerCase(); }
+function nameUsed_(all, name, exceptUser) {
+  var key = nameKey_(name);
+  return !!key && Object.keys(all).some(function (k) { return k !== exceptUser && nameKey_(all[k].name) === key; });
+}
 function loginChoices_() {              // 登入畫面的下拉選單：管理員、幹部，加上目前在職的員工
-  var all = accounts_(), byEmp = {}, out = [];
+  var all = accounts_(), byEmp = {}, out = [], seen = {};
   Object.keys(all).sort().forEach(function (k) {
     var a = all[k];
     if (a.empId) byEmp[a.empId] = a;
     else if (a.admin) out.unshift({ u: a.u, label: "管理員（" + a.u + "）", has: true });
-    else out.push({ u: a.u, label: a.name + "（幹部）", has: true });
+    else { out.push({ u: a.u, label: a.name + "（幹部）", has: true }); seen[nameKey_(a.name)] = 1; }
   });
   readAll_("employees").filter(function (e) { return e.isActive !== false; })
     .sort(function (a, b) { return (a.scheduleOrder === undefined ? 9999 : a.scheduleOrder) - (b.scheduleOrder === undefined ? 9999 : b.scheduleOrder); })
-    .forEach(function (e) { var a = byEmp[e.id]; out.push({ u: a ? a.u : "", label: e.name, has: !!a }); });
+    .forEach(function (e) {                // 同名只列一次，幹部帳號優先
+      var a = byEmp[e.id], key = nameKey_(e.name);
+      if (seen[key]) return;
+      seen[key] = 1;
+      out.push({ u: a ? a.u : "", label: e.name, has: !!a });
+    });
   return out;
 }
 function hashKey_(salt, key) { return sha_(salt + ":" + key); }
@@ -211,6 +221,7 @@ function validNewAcc_(req, all) {
   if (all[u]) return "duplicate";
   if (!req.key) return "bad_request";
   if (req.empId && Object.keys(all).some(function (k) { return all[k].empId === req.empId; })) return "emp_taken";
+  if (nameUsed_(all, req.name || req.username, "")) return "name_taken";
   return "";
 }
 function newAcc_(req) {
@@ -233,6 +244,7 @@ function accountSave_(req) {
       if (!a) return { error: "not_found" };
       if (a.admin) return { error: "forbidden" };
       if (req.empId && Object.keys(all).some(function (k) { return k !== u && all[k].empId === req.empId; })) return { error: "emp_taken" };
+      if (nameUsed_(all, req.name || a.name, u)) return { error: "name_taken" };
       a.name = String(req.name || a.name).trim();
       a.empId = req.empId || "";
       a.perms = normPerms_(req.perms, a.empId);
