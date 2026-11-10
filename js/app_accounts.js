@@ -67,27 +67,49 @@
       this.openLineWindow(lines.join("\n"), { title: "暫時密碼（關閉後就看不到了）", subtitle, boxHeight: 260 });
     },
     openAccountDialog(acc, forEmployee) {
-      const isEdit = !!acc, isEmp = isEdit ? !!acc.empId : forEmployee;
+      const isEdit = !!acc;
+      let isEmp = isEdit ? !!acc.empId : forEmployee;
       if (isEdit && acc.admin) { msg.info("提醒", "管理員帳號固定擁有全部權限。"); return; }
+      const NO_EMP = "沒有可綁定的員工";
       const used = new Set((this.accounts || []).filter((a) => a.empId && (!acc || a.username !== acc.username)).map((a) => a.empId));
       const emps = this.db.employees.filter((e) => !used.has(e.id) && (e.isActive !== false || (acc && acc.empId === e.id)));
-      const label = (e) => e.name;
       const uname = U.input(isEmp ? "預設使用員工姓名" : "例如：manager1", isEdit ? { value: acc.username, disabled: true } : {});
       const dname = U.input("顯示的姓名", isEdit ? { value: acc.name } : {});
-      const empMenu = isEmp ? new U.OptionMenu(emps.length ? emps.map(label) : ["沒有可綁定的員工"], (v) => { if (!isEdit) { uname.value = v; dname.value = v; } }) : null;
-      if (empMenu && isEdit) { const cur = this.db.employees.find((e) => e.id === acc.empId); if (cur) empMenu.set(cur.name); }
-      if (empMenu && !isEdit && emps.length) { uname.value = emps[0].name; dname.value = emps[0].name; }
-      const opts = isEmp ? ["不可用", "只能看"] : ["不可用", "只能看", "可編輯"];
-      const menus = {}, rows = MODS.filter(([m]) => !isEmp || EMP_MODS.includes(m)).map(([m, l]) => {
-        menus[m] = new U.OptionMenu(opts);
-        menus[m].set(LEVEL[(acc ? acc.perms[m] : isEmp ? EMP_DEFAULT[m] : "view") || "none"]);
-        return [h("span", { text: l }), menus[m]];
-      });
+      const empMenu = new U.OptionMenu(emps.length ? emps.map((e) => e.name) : [NO_EMP], (v) => { dname.value = v; if (!isEdit) uname.value = v; });
+      const current = isEdit ? this.db.employees.find((e) => e.id === acc.empId) : null;
+      if (current) empMenu.set(current.name);
+      if (!isEdit && isEmp && emps.length) { uname.value = emps[0].name; dname.value = emps[0].name; }
+      const empWrap = h("div", { class: "mb8" }, U.label("綁定員工"), empMenu);
+      const hint = U.sub("排班或員工設定開「可編輯」時，連動需要會一併讀取出勤與假別資料", { style: { display: "block", marginBottom: "8px" } });
+      const permBox = h("div", { class: "perm-grid mb8" });
+      let menus = {};
+      const buildPerms = () => {                // 切換身分時重排權限，員工只有看的選項
+        const before = {};
+        Object.keys(menus).forEach((m) => { before[m] = LEVEL_KEY[menus[m].get()]; });
+        menus = {};
+        clear(permBox);
+        MODS.filter(([m]) => !isEmp || EMP_MODS.includes(m)).forEach(([m, l]) => {
+          let level = before[m] || (acc ? acc.perms[m] : isEmp ? EMP_DEFAULT[m] : "view") || "none";
+          if (isEmp && level === "edit") level = "view";
+          menus[m] = new U.OptionMenu(isEmp ? ["不可用", "只能看"] : ["不可用", "只能看", "可編輯"]);
+          menus[m].set(LEVEL[level]);
+          permBox.append(h("span", { text: l }), menus[m].el);
+        });
+        empWrap.style.display = isEmp ? "" : "none";
+        hint.style.display = isEmp ? "none" : "block";
+      };
+      const roleMenu = isEdit ? new U.OptionMenu(["幹部", "員工"], (v) => {
+        isEmp = v === "員工";
+        if (isEmp && !current && emps.length) dname.value = empMenu.get();
+        buildPerms();
+      }) : null;
+      if (roleMenu) roleMenu.set(isEmp ? "員工" : "幹部");
+      buildPerms();
       let ov;
       const save = async () => {
         const username = uname.value.trim();
         if (!username) { await msg.warn("提醒", "請輸入帳號名稱"); return; }
-        const emp = isEmp ? emps.find((e) => label(e) === empMenu.get()) : null;
+        const emp = isEmp ? emps.find((e) => e.name === empMenu.get()) : null;
         if (isEmp && !emp) { await msg.warn("提醒", "請選擇要綁定的員工"); return; }
         const perms = {};
         Object.keys(menus).forEach((m) => { perms[m] = LEVEL_KEY[menus[m].get()]; });
@@ -102,14 +124,14 @@
         ov.remove();
         await this.renderAccounts();
         if (temp) this.showTempPasswords([`帳號：${username}`, `暫時密碼：${temp}`, "第一次登入後要改成自己的密碼"], "請把這組資料交給本人，可複製貼到 LINE");
-        else await msg.info("完成", `已更新 ${username} 的權限，對方的畫面幾秒內會跟著變更`);
+        else await msg.info("完成", `已更新 ${username} 的身分與權限，對方的畫面幾秒內會跟著變更`);
       };
       ov = U.modal(h("div", { class: "dlg", style: { width: "480px" } }, h("div", { class: "accent", style: { background: X.purple } }), h("div", { class: "pad" },
-        U.sectionHeader("🔐", isEdit ? "修改帳號權限" : isEmp ? "新增員工帳號" : "新增幹部帳號", isEmp ? "員工帳號只看得到自己的資料，不能修改" : "逐項設定這個帳號能使用的功能"),
-        empMenu ? h("div", { class: "mb8" }, U.label("綁定員工"), empMenu) : null,
+        U.sectionHeader("🔐", isEdit ? "修改帳號權限" : isEmp ? "新增員工帳號" : "新增幹部帳號", isEdit ? "可切換幹部／員工身分；員工只看得到自己的資料" : isEmp ? "員工帳號只看得到自己的資料，不能修改" : "逐項設定這個帳號能使用的功能"),
+        roleMenu ? h("div", { class: "mb8" }, U.label("身分"), roleMenu) : null,
+        empWrap,
         h("div", { class: "grid3 mb8", style: { gridTemplateColumns: "1fr 1fr" } }, h("div", {}, U.label("帳號（登入用）"), uname), h("div", {}, U.label("姓名"), dname)),
-        h("div", { class: "divider" }), h("div", { class: "perm-grid mb8" }, rows.flat()),
-        isEmp ? null : U.sub("排班或員工設定開「可編輯」時，連動需要會一併讀取出勤與假別資料", { style: { display: "block", marginBottom: "8px" } }),
+        h("div", { class: "divider" }), permBox, hint,
         h("div", { class: "row", style: { flexWrap: "nowrap" } }, U.primary(isEdit ? "💾 儲存" : "➕ 建立帳號", save, { class: "btn primary tall grow" }), U.danger("✖ 取消", () => ov.remove(), { class: "btn danger tall" })))));
     },
     editSelectedAccount() {

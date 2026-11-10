@@ -249,7 +249,7 @@ function accountsList_() {
 }
 function accountSave_(req, admin) {
   return withLock_(function () {
-    var all = accounts_(), u = normUser_(req.username), a = all[u];
+    var all = accounts_(), u = normUser_(req.username), a = all[u], note = "";
     if (req.isNew) {
       var err = validNewAcc_(req, all);
       if (err) return { error: err };
@@ -258,13 +258,16 @@ function accountSave_(req, admin) {
       if (!a) return { error: "not_found" };
       if (a.admin) return { error: "forbidden" };
       if (req.empId && Object.keys(all).some(function (k) { return k !== u && all[k].empId === req.empId; })) return { error: "emp_taken" };
-      if (nameUsed_(all, req.name || a.name, u)) return { error: "name_taken" };
+      if (nameKey_(req.name || a.name) !== nameKey_(a.name) && nameUsed_(all, req.name, u)) return { error: "name_taken" };   // 姓名沒改就不檢查
+      var newEmp = req.empId || "";
+      if (!!a.empId !== !!newEmp) note = "（身分 " + (a.empId ? "員工" : "幹部") + "→" + (newEmp ? "員工" : "幹部") + "）";
+      else if (a.empId !== newEmp) note = "（改綁定員工）";
       a.name = String(req.name || a.name).trim();
       a.empId = req.empId || "";
       a.perms = normPerms_(req.perms, a.empId);
     }
     putAccount_(a);
-    audit_(admin, "帳號管理", (req.isNew ? "新增帳號：" : "修改權限：") + a.u);
+    audit_(admin, "帳號管理", (req.isNew ? "新增帳號：" : "修改權限：") + a.u + note);
     return { rev: bump_() };                             // 版本號變動，對方的畫面幾秒內跟著更新權限
   });
 }
