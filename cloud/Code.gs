@@ -12,6 +12,7 @@ var SHEETS = {
 };
 var COLLECTIONS = Object.keys(SHEETS);
 var SESSION_DAYS = 30;
+var SESSIONS_VALID_AFTER = 1794274011408;   // 這個時間以前發出的登入全部失效，要重新輸入帳號密碼
 var CELL_LIMIT = 49000;
 var LAW_URL = "https://law.moj.gov.tw/LawClass/LawAll.aspx?PCode=N0030001";
 var ADMIN = "admin";
@@ -111,7 +112,8 @@ function normPerms_(perms, empId) {
 }
 function allEdit_() { var o = {}; MODULES.forEach(function (m) { o[m] = "edit"; }); return o; }
 function publicAcc_(a) { return { username: a.u, name: a.name, empId: a.empId || "", admin: !!a.admin, perms: a.admin ? allEdit_() : normPerms_(a.perms, a.empId), mustChange: !!a.must }; }
-function tokenParts_(v) {               // 舊版的登入憑證只存到期時間，一律視為 admin
+function tokenDead_(parts) { return parts.e <= Date.now() || parts.e - SESSION_DAYS * 86400000 < SESSIONS_VALID_AFTER; }
+function tokenParts_(v) {               // 舊版的登入憑證只存到期時間
   if (String(v).charAt(0) !== "{") return { e: Number(v), u: ADMIN };
   return JSON.parse(v);
 }
@@ -122,18 +124,18 @@ function issueToken_(user) {
   return t;
 }
 function pruneTokens_() {
-  var p = props_(), all = p.getProperties(), now = Date.now();
-  Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0 && tokenParts_(all[k]).e < now) p.deleteProperty(k); });
+  var p = props_(), all = p.getProperties();
+  Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0 && tokenDead_(tokenParts_(all[k]))) p.deleteProperty(k); });
 }
 function tokenUser_(t) {                // 幾秒一次的同步檢查走快取，避開 PropertiesService 每日讀取上限
   if (!t) return null;
-  var hash = sha_(String(t)), cache = CacheService.getScriptCache(), hit = cache.get("tk_" + hash);
-  if (hit) return hit === "1" ? ADMIN : hit;
+  var hash = sha_(String(t)), cache = CacheService.getScriptCache(), hit = cache.get("tk2_" + hash);
+  if (hit) return hit;
   var v = props_().getProperty("tok_" + hash);
   if (!v) return null;
   var parts = tokenParts_(v);
-  if (parts.e <= Date.now()) return null;
-  cache.put("tk_" + hash, parts.u, Math.min(21600, Math.floor((parts.e - Date.now()) / 1000)));
+  if (tokenDead_(parts)) return null;
+  cache.put("tk2_" + hash, parts.u, Math.min(21600, Math.floor((parts.e - Date.now()) / 1000)));
   return parts.u;
 }
 function revokeTokens_(user) {
@@ -141,7 +143,7 @@ function revokeTokens_(user) {
   Object.keys(all).forEach(function (k) {
     if (k.indexOf("tok_") !== 0 || tokenParts_(all[k]).u !== user) return;
     p.deleteProperty(k);
-    cache.remove("tk_" + k.slice(4));
+    cache.remove("tk2_" + k.slice(4));
   });
 }
 function setup_(req) {
@@ -173,7 +175,7 @@ function login_(req) {
 function logout_(req) {
   var hash = sha_(String(req.token));
   props_().deleteProperty("tok_" + hash);
-  CacheService.getScriptCache().remove("tk_" + hash);
+  CacheService.getScriptCache().remove("tk2_" + hash);
   return { ok: true };
 }
 function changePassword_(req, acc) {
