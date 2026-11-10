@@ -118,31 +118,19 @@
       this.tagCount = h("span", {});
       this.tagsFrame = h("div", { class: "row mb8" });
       this.newTag = U.input("輸入新標籤名稱，例如：外勤", { onkeydown: (e) => { if (e.key === "Enter") this.addTag(); } });
-      const pwOld = h("input", { type: "password", placeholder: "目前密碼", autocomplete: "current-password" }), pwNew = h("input", { type: "password", placeholder: "新密碼（至少 8 個字元）", autocomplete: "new-password" });
-      const changePw = async () => {
-        if (pwNew.value.length < 8) { await msg.warn("提醒", "新密碼至少 8 個字元"); return; }
-        try {
-          const st = await this.store.status(), r = await this.store.changePassword(pwOld.value, pwNew.value, st.salt);
-          if (r.error === "wrong_password") { await msg.warn("提醒", "目前密碼錯誤"); return; }
-          pwOld.value = ""; pwNew.value = "";
-          await msg.info("完成", "密碼已更新，其他裝置需要重新登入");
-        } catch (_e) { await msg.error("錯誤", "連線失敗，請再試一次"); }
-      };
       t.append(
         U.accentCard(X.tealL, h("div", { class: "pad" }, U.sectionHeader("🎨", "外觀設定", "切換介面深色／淺色模式（本系統以深色為主要設計，淺色模式效果有限）"), h("div", { class: "row" }, "外觀模式", h("div", { style: { width: "120px" } }, this.setAppearance), this.appearanceChip))),
         U.accentCard(X.orange, h("div", { class: "pad" }, U.sectionHeader("⏱️", "加班相關預設值", "影響月報表加班上限警示燈號，以及打卡登錄分頁的預設值"),
           h("div", { class: "grid4 mb8" }, h("div", {}, U.label("月加班上限(小時)"), this.setCap), h("div", {}, U.label("月加班延長上限(小時)"), this.setCapExt), h("div", {}, U.label("預設休息時間(分鐘)"), this.setBreak)),
-          U.sub("⚖️ 延長工時上限需經工會／勞資會議同意（勞基法第32條），且每3個月合計不得超過138小時", { style: { marginBottom: "8px" } }), U.primary("💾 儲存設定", () => this.saveOt(), { class: "btn primary tall full" }))),
+          U.sub("⚖️ 延長工時上限需經工會／勞資會議同意（勞基法第32條），且每3個月合計不得超過138小時", { style: { marginBottom: "8px" } }), U.primary("💾 儲存設定", () => this.saveOt(), { class: "btn primary tall full wr" }))),
         U.accentCard(X.gold, h("div", { class: "pad" }, U.sectionHeader("⚖️", "法規異動偵測", "連線法務部「全國法規資料庫」比對勞動基準法官方頁面的修正日期是否變動；僅負責偵測並提醒人工確認，不會自動修改本軟體的試算邏輯"), this.lawStatus,
-          h("div", { class: "row" }, U.primary("🔎 立即檢查勞基法是否有修正", () => this.checkLaw(true), { class: "btn primary tall" }), U.ghost("🔗 開啟官方法規頁面", () => window.open(C.LAW_CHECK_URL, "_blank", "noopener"), { class: "btn ghost tall" })))),
+          h("div", { class: "row" }, U.primary("🔎 立即檢查勞基法是否有修正", () => this.checkLaw(true), { class: "btn primary tall wr" }), U.ghost("🔗 開啟官方法規頁面", () => window.open(C.LAW_CHECK_URL, "_blank", "noopener"), { class: "btn ghost tall" })))),
         U.accentCard(X.teal, h("div", { class: "pad" }, U.sectionHeader("🗓️", "排班班表顯示設定", "調整「本週班表」卡片內文字大小，拖曳後立即套用"), h("div", { class: "row", style: { flexWrap: "nowrap" } }, h("span", { text: "卡片文字大小", style: { whiteSpace: "nowrap" } }), this.setFont, this.fontLabel))),
         U.accentCard(X.gold, h("div", { class: "pad" }, h("div", { class: "row mb8" }, h("div", { class: "sec", style: { margin: 0 } }, h("div", { class: "badge", text: "🏷️" }), h("div", {}, h("div", { class: "sec-t", text: "時段備註標籤設定" }), h("div", { class: "sec-s", text: "設定「排班班表」時段可勾選的備註標籤（地點／職務等），供快速標記" }))), this.tagCount),
-          this.tagsFrame, h("div", { class: "row", style: { flexWrap: "nowrap" } }, h("div", { class: "grow" }, this.newTag), U.primary("➕ 新增標籤", () => this.addTag(), { style: { height: "36px" } })))),
-        U.accentCard(X.red, h("div", { class: "pad" }, U.sectionHeader("💾", "資料備份／還原", "目前資料儲存於：Google 試算表"),
+          this.tagsFrame, h("div", { class: "row wr", style: { flexWrap: "nowrap" } }, h("div", { class: "grow" }, this.newTag), U.primary("➕ 新增標籤", () => this.addTag(), { style: { height: "36px" } })))),
+        this.me.admin ? U.accentCard(X.red, h("div", { class: "pad" }, U.sectionHeader("💾", "資料備份／還原", "目前資料儲存於：Google 試算表"),
           h("div", { class: "banner mb8" }, h("div", { class: "accent", style: { background: X.red } }), h("div", { style: { padding: "8px 12px", color: X.red }, text: "⚠️ 「從備份還原」將覆蓋目前所有資料（員工、出勤、假別、排班、設定），且無法復原，請確認備份檔案來源正確" })),
-          h("div", { class: "row" }, U.primary("📤 匯出備份", () => this.exportBackup(), { class: "btn primary tall" }), U.danger("📥 從備份還原", () => this.restoreBackup(), { class: "btn danger tall" })))),
-        U.accentCard(X.purple, h("div", { class: "pad" }, U.sectionHeader("🔐", "登入與帳號", "網頁版用密碼保護資料；更換密碼後其他裝置需重新登入"),
-          h("div", { class: "grid4 mb8" }, h("div", {}, pwOld), h("div", {}, pwNew), U.primary("更新密碼", changePw, { class: "btn primary" }), U.ghost("登出這台裝置", async () => { await this.store.logout(); location.reload(); })))));
+          h("div", { class: "row" }, U.primary("📤 匯出備份", () => this.exportBackup(), { class: "btn primary tall" }), U.danger("📥 從備份還原", () => this.restoreBackup(), { class: "btn danger tall" })))) : null);
       this.renderLawStatus();
     },
     loadSettingsIntoForm() {
@@ -181,6 +169,7 @@
       tags.forEach((tag) => f.append(h("span", { class: "tag-chip" }, tag, h("button", { text: "✖", type: "button", onclick: () => this.removeTag(tag) }))));
     },
     async addTag() {
+      if (!this.can("settings")) return;
       const name = this.newTag.value.trim();
       if (!name) return;
       if (this.db.settings.shiftNoteTags.includes(name)) { await msg.warn("提醒", "此標籤已存在"); return; }
@@ -190,6 +179,7 @@
       this.renderTags();
     },
     async removeTag(tag) {
+      if (!this.can("settings")) return;
       if (!(await msg.ask("確認移除", `確定要移除標籤「${tag}」嗎？`))) return;
       this.db.settings.shiftNoteTags = this.db.settings.shiftNoteTags.filter((t) => t !== tag);
       this.persist();

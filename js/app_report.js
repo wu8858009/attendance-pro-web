@@ -78,7 +78,7 @@
       const pending = h("div", { style: { minWidth: 0 } },
         h("div", { class: "row mb4" }, U.ghost("⬇ 匯出 CSV", () => this.exportCsv()), U.ghost("⬇ 匯出 Excel", () => this.exportExcel()), U.primary("📋 複製待辦通知到LINE", () => this.openLineWindow(this.L.buildLineMessage(this.reportMonth.get() || C.thisMonth())))),
         U.card(h("div", { style: { padding: "12px 16px 0" } }, U.sectionHeader("⏳", "待處理事項", "選取後按「已送出」（或雙擊／Enter）登記到「特休/補休」，可 Ctrl／Shift 多選"),
-          h("div", { class: "row mb8" }, U.primary("✅ 選取已送出  Enter", () => this.markPendingSubmitted()), U.ghost("✅ 全部已送出", () => this.markPendingSubmitted(true)))), this.pendingTree));
+          h("div", { class: "row mb8" }, U.primary("✅ 選取已送出  Enter", () => this.markPendingSubmitted(), { class: "btn primary wr" }), U.ghost("✅ 全部已送出", () => this.markPendingSubmitted(true), { class: "btn ghost wr" }))), this.pendingTree));
       t.append(
         U.card(h("div", { class: "pad" }, h("div", { class: "row", style: { gap: "16px" } }, h("div", { class: "sec", style: { margin: 0 } }, h("div", { class: "badge", text: "📊" }), h("div", {}, h("div", { class: "sec-t", text: "月報表" }), h("div", { class: "sec-s", text: "選擇月份查看統計數據與勞基法遵循檢查" }))), h("div", { style: { width: "140px" } }, this.reportMonth)), this.kpis, this.violationAlert)),
         U.card(h("div", { style: { padding: "12px 16px 0" } }, U.sectionHeader("📈", "圖表分析", "員工加班時數排行／日別類型工時／每日工時分佈")),
@@ -172,6 +172,7 @@
       for (const [name, level, text] of issues) box.append(h("span", { class: level, text: `${level === "high" ? "🔴" : "🟠"} 【${name}】${text}\n` }));
     },
     async markPendingSubmitted(all) {
+      if (!this.can("report")) return;
       const ids = all ? Array.from(this.pendingMap.keys()) : this.pendingTree.selected().filter((i) => this.pendingMap.has(i));
       if (!ids.length) { await msg.info("提醒", "請先點選要標記為已送出的項目（可 Ctrl／Shift 多選）"); return; }
       const plans = [];

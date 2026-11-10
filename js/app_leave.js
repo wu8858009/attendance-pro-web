@@ -20,9 +20,9 @@
       const al = U.card(h("div", { class: "pad" }, U.sectionHeader("🌴", "特休計算", "僅正職員工，每次請休以4小時為單位"),
         U.label("選擇正職員工"), h("div", { class: "mb8" }, this.alEmp), this.annualStats,
         h("div", { class: "prog", style: { height: "8px", borderRadius: "4px", marginTop: "10px" } }, this.annualBar), this.annualLabel, h("div", { class: "divider" }),
-        U.sub("登記特休使用", { style: { margin: "8px 0 4px" } }),
-        h("div", { class: "grid3 mb8" }, h("div", {}, U.label("日期"), this.alDate), h("div", {}, U.label("使用時數"), this.alHours), h("div", {}, U.label("備註(選填)"), this.alNote)),
-        U.primary("🌴 登記特休使用", () => this.addAnnualUsage(), { class: "btn primary full" })));
+        U.sub("登記特休使用", { class: "lbl sub wr", style: { margin: "8px 0 4px" } }),
+        h("div", { class: "grid3 mb8 wr" }, h("div", {}, U.label("日期"), this.alDate), h("div", {}, U.label("使用時數"), this.alHours), h("div", {}, U.label("備註(選填)"), this.alNote)),
+        U.primary("🌴 登記特休使用", () => this.addAnnualUsage(), { class: "btn primary full wr" })));
       // 補休
       this.compMonth = null;
       this.clEmp = new U.OptionMenu([], () => { this.renderCompCard(); this.autofillCompEntry(true); });
@@ -42,11 +42,11 @@
       this.clNote = U.input("例如：對應7/10加班2小時");
       const cl = U.card(h("div", { class: "pad" }, U.sectionHeader("➖", "補休管理", "取得與使用皆以0.5小時為單位，每月1日自動歸0"),
         U.label("選擇員工"), h("div", { class: "mb8" }, this.clEmp),
-        h("div", { class: "row mb4" }, U.btn("ghost", "◀", () => this.shiftCompMonth(-1)), this.compMonthLabel, this.compNext, this.compToday), h("div", { class: "mb8" }, this.compStats), h("div", { class: "divider" }),
+        h("div", { class: "row mb4" }, U.btn("ghost", "◀", () => this.shiftCompMonth(-1)), this.compMonthLabel, this.compNext, this.compToday), h("div", { class: "mb8" }, this.compStats), h("div", { class: "wr" }, h("div", { class: "divider" }),
         h("div", { class: "grid3 mb8" }, h("div", {}, U.label("類型"), this.clType), h("div", {}, U.label("日期"), this.clDate), this.clHint),
         h("div", { class: "grid3 mb8" }, h("div", {}, U.label("開始時間"), this.clStart), h("div", {}, U.label("結束時間"), this.clEnd), h("div", {}, U.label("時數(自動計算，0.5為單位)"), this.clHours)),
         U.label("備註(選填)"), h("div", { class: "mb8" }, this.clNote),
-        U.primary("➕ 新增補休紀錄", () => this.addCompEntry(), { class: "btn primary full" })));
+        U.primary("➕ 新增補休紀錄", () => this.addCompEntry(), { class: "btn primary full" }))));
       this.updateCompHours();
       // 喪假
       this.blEmp = new U.OptionMenu([]);
@@ -59,6 +59,7 @@
         U.label("選擇員工"), h("div", { class: "mb8" }, this.blEmp), U.label("親屬關係"), h("div", { class: "mb8" }, this.blRelation),
         h("div", { class: "grid3 mb8" }, h("div", {}, U.label("起始日期"), this.blDate), h("div", {}, U.label("天數(依關係帶入，可調整)"), this.blDays), h("div", {}, U.label("備註(選填)"), this.blNote)),
         U.primary("🖤 新增喪假登記", () => this.addBereavement(), { class: "btn primary full" })));
+      bl.classList.add("wr");
       this.onRelationChange();
       // 全部假別紀錄
       const r = () => this.renderLeaveLedger();
@@ -69,7 +70,7 @@
       const ledger = U.card(h("div", { class: "pad", style: { paddingBottom: 0 } }, U.sectionHeader("📜", "全部假別紀錄", "可依員工、類型篩選"),
         h("div", { class: "row mb8" }, h("div", { style: { width: "180px" } }, this.leaveFilterEmp), h("div", { style: { width: "140px" } }, this.leaveFilterType),
           U.ghost("🔄 清除篩選", () => { this.leaveFilterEmp.set("全部員工"); this.leaveFilterType.set("全部類型"); r(); })), this.leaveStats),
-      this.leaveTree, h("div", { style: { textAlign: "right", padding: "0 10px 10px" } }, U.danger("🗑 刪除選取紀錄", () => this.deleteSelectedLeave())));
+      this.leaveTree, h("div", { style: { textAlign: "right", padding: "0 10px 10px" } }, U.danger("🗑 刪除選取紀錄", () => this.deleteSelectedLeave(), { class: "btn danger wr" })));
       t.append(h("div", { class: "pair" }, al, cl), h("div", { class: "pair" }, bl, ledger));
     },
     refreshLeaveCombos() {

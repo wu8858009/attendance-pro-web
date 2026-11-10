@@ -9,8 +9,10 @@
   const NAV_DEFS = [
     ["📊 月報表", "📊", "月報表"], ["✏️ 打卡登錄", "✏️", "打卡登錄"], ["📋 出勤記錄", "📋", "出勤記錄"], ["👥 員工設定", "👥", "員工設定"],
     ["🗓️ 排班班表", "🗓️", "排班班表"], ["🌴 特休/補休", "🌴", "特休/補休"], ["📖 勞工局說明", "📖", "勞工局說明"], ["🛠️ 軟體設定", "🛠️", "軟體設定"],
-    ["📘 使用說明書", "📘", "使用說明書"], ["🏮 農民曆", "🏮", "農民曆"],
+    ["📘 使用說明書", "📘", "使用說明書"], ["🏮 農民曆", "🏮", "農民曆"], ["🔐 帳號權限", "🔐", "帳號權限"],
   ];
+  // 各分頁對應的權限項目；沒列出的分頁（說明、農民曆、帳號）每個人都能開
+  const NAV_MOD = { "📊 月報表": "report", "✏️ 打卡登錄": "punch", "📋 出勤記錄": "records", "👥 員工設定": "employees", "🗓️ 排班班表": "schedule", "🌴 特休/補休": "leave", "🛠️ 軟體設定": "settings" };
   const FLAG_META = { ot: ["🟠", X.orange], leave: ["🔴", X.red], normal: ["🟢", X.green] };
 
   class App {
@@ -22,6 +24,10 @@
     }
     get db() { return this.store.db; }
     root() { return document.getElementById("root"); }
+    get me() { return this.store.me || { perms: {}, admin: false, name: "", username: "" }; }
+    perm(m) { return this.me.perms[m] || "none"; }
+    can(m) { return this.perm(m) === "edit"; }
+    tabAllowed(n) { const m = NAV_MOD[n]; return !m || this.perm(m) !== "none"; }
 
     // ---- 啟動與登入 ----
     static boot() { window.app = new App(); window.app.start(); }
@@ -54,6 +60,7 @@
         return;
       }
       const setup = st.needsSetup;
+      const user = setup ? null : h("input", { type: "text", autocomplete: "username", placeholder: "帳號", value: localStorage.getItem("att_user") || "" });
       const pw = h("input", { type: "password", autocomplete: setup ? "new-password" : "current-password", placeholder: "密碼" });
       const pw2 = setup ? h("input", { type: "password", autocomplete: "new-password", placeholder: "再輸入一次密碼" }) : null;
       const err = h("div", { class: "err", text: notice || "", style: { minHeight: "20px", margin: "6px 0" } });
@@ -61,44 +68,78 @@
       const submit = async () => {
         if (setup && pw.value.length < 8) { err.textContent = "密碼至少 8 個字元"; return; }
         if (setup && pw.value !== pw2.value) { err.textContent = "兩次輸入的密碼不一致"; return; }
-        if (!pw.value) return;
+        if (!pw.value || (user && !user.value.trim())) { err.textContent = "請輸入帳號與密碼"; return; }
         go.disabled = true; err.textContent = setup ? "設定中…" : "登入中…";
         try {
-          const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.login(pw.value, st.salt);
-          if (r.token) { await this.enter(); return; }
-          err.textContent = { wrong_password: "密碼錯誤", locked: "錯誤次數過多，請 10 分鐘後再試", already_setup: "密碼已設定過，請重新整理後登入" }[r.error] || "登入失敗";
+          const r = setup ? await this.store.setup(pw.value, st.salt) : await this.store.login(user.value.trim(), pw.value, st.salt);
+          if (r.token) { if (user) localStorage.setItem("att_user", user.value.trim()); await this.enter(); return; }
+          err.textContent = { wrong_password: "帳號或密碼錯誤", locked: "錯誤次數過多，請 10 分鐘後再試", already_setup: "密碼已設定過，請重新整理後登入" }[r.error] || "登入失敗";
         } catch (_e) { err.textContent = "連線失敗，請再試一次"; }
         go.disabled = false;
       };
       go.addEventListener("click", submit);
       const form = h("div", { class: "pad" },
-        h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : "請輸入管理密碼" }))),
-        h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null, err, go);
+        h("div", { class: "sec" }, h("div", { class: "badge", text: "⏱" }), h("div", {}, h("div", { class: "sec-t", text: "員工出勤管理系統 PRO" }), h("div", { class: "sec-s", text: setup ? "第一次使用：請設定管理密碼" : "請輸入帳號與密碼" }))),
+        user ? h("div", { class: "mb8" }, user) : null, h("div", { class: "mb8" }, pw), pw2 ? h("div", { class: "mb8" }, pw2) : null, err, go);
       form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
       clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));
-      pw.focus();
+      (user && !user.value ? user : pw).focus();
+    }
+    showForceChange() {                 // 暫時密碼第一次登入，要改成自己的密碼才能使用
+      const oldPw = h("input", { type: "password", autocomplete: "current-password", placeholder: "暫時密碼" });
+      const pw1 = h("input", { type: "password", autocomplete: "new-password", placeholder: "新密碼（至少 8 個字元）" });
+      const pw2 = h("input", { type: "password", autocomplete: "new-password", placeholder: "再輸入一次新密碼" });
+      const err = h("div", { class: "err", style: { minHeight: "20px", margin: "6px 0" } });
+      const go = U.primary("更新密碼並開始使用", null, { class: "btn primary taller" });
+      const submit = async () => {
+        if (pw1.value.length < 8) { err.textContent = "新密碼至少 8 個字元"; return; }
+        if (pw1.value !== pw2.value) { err.textContent = "兩次輸入的新密碼不一致"; return; }
+        if (pw1.value === oldPw.value) { err.textContent = "新密碼不能和暫時密碼相同"; return; }
+        go.disabled = true; err.textContent = "更新中…";
+        try {
+          const st = await this.store.status(), r = await this.store.changePassword(oldPw.value, pw1.value, st.salt);
+          if (r.token) { await this.enter(); return; }
+          err.textContent = r.error === "wrong_password" ? "暫時密碼錯誤" : "更新失敗";
+        } catch (_e) { err.textContent = "連線失敗，請再試一次"; }
+        go.disabled = false;
+      };
+      go.addEventListener("click", submit);
+      const form = h("div", { class: "pad" },
+        h("div", { class: "sec" }, h("div", { class: "badge", text: "🔐" }), h("div", {}, h("div", { class: "sec-t", text: "請設定自己的密碼" }), h("div", { class: "sec-s", text: "這是第一次登入或密碼已被重設，改好才能繼續使用" }))),
+        h("div", { class: "mb8" }, oldPw), h("div", { class: "mb8" }, pw1), h("div", { class: "mb8" }, pw2), err, go,
+        U.ghost("登出", async () => { await this.store.logout(); location.reload(); }, { style: { marginTop: "8px" } }));
+      form.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+      clear(this.root()).append(h("div", { class: "center" }, h("div", { class: "card login" }, form)));
+      oldPw.focus();
     }
     async enter() {
       this.splash("讀取 Google 試算表資料…");
       try { await this.store.load(); }
       catch (e) {
         if (e.message === "auth") { await this.showLogin("登入已過期，請重新登入"); return; }
+        if (e.message === "must_change") { this.showForceChange(); return; }
         this.splashText.textContent = "讀取資料失敗，請檢查網路後重新整理。";
         return;
       }
       this.L.db = this.store.db;
       this.store.onStatus = () => this.refreshFooter();
-      this.store.onRemote = () => { this.L.db = this.store.db; this.refreshAll(); };   // 只更新畫面，不重帶正在填的表單
+      this.meJson = JSON.stringify(this.store.me);
+      this.store.onRemote = () => {                     // 只更新畫面，不重帶正在填的表單；權限被改了就整頁重開
+        if (JSON.stringify(this.store.me) !== this.meJson) { location.reload(); return; }
+        this.L.db = this.store.db; this.refreshAll();
+      };
+      this.store.onForbidden = () => { this.L.db = this.store.db; this.refreshAll(); msg.warn("沒有權限", "這個帳號不能做這項修改，內容已還原。"); };
       this.store.onAuthLost = () => this.showLogin("登入已過期，請重新登入");
       window.addEventListener("beforeunload", (e) => { if (this.store.dirty) { e.preventDefault(); e.returnValue = ""; } });
       this.buildShell();
       document.body.dataset.mode = this.db.settings.appearanceMode;
       this.buildEntryTab(); this.buildRecordsTab(); this.buildEmployeesTab(); this.buildScheduleTab(); this.buildLeaveTab();
-      this.buildReportTab(); this.buildHelpTab(); this.buildSettingsTab(); this.buildManualTab(); this.buildAlmanacTab();
-      this.selectTab("✏️ 打卡登錄");
+      this.buildReportTab(); this.buildHelpTab(); this.buildSettingsTab(); this.buildManualTab(); this.buildAlmanacTab(); this.buildAccountTab();
+      for (const [n] of NAV_DEFS) if (NAV_MOD[n] && !this.can(NAV_MOD[n])) this.tabs[n].classList.add("ro");
+      this.selectTab(this.navOrder.includes("✏️ 打卡登錄") ? "✏️ 打卡登錄" : this.navOrder.find((n) => NAV_MOD[n]) || this.navOrder[0]);
       this.refreshAll();
       this.bindShortcuts();
-      this.checkLaw(false);
+      if (this.can("settings")) this.checkLaw(false);
     }
 
     // ---- 外框 ----
@@ -108,7 +149,7 @@
       const hdr = h("div", { class: "hdr" },
         h("div", { class: "hdr-left" }, this.burger, h("div", { class: "logo", text: "⏱" }),
           h("div", {}, h("div", { class: "hdr-title" }, "員工出勤管理系統", h("span", { class: "pro", text: "PRO" })), h("div", { class: "hdr-sub", text: "Enterprise Attendance & Overtime Console" }))),
-        h("div", { class: "hdr-right" }, h("div", { class: "hdr-date", text: `📅 ${C.todayIso()}（星期${wd}）` }), h("div", { class: "hdr-note", text: "內部行政試算輔助工具" })));
+        h("div", { class: "hdr-right" }, h("div", { class: "hdr-date", text: `📅 ${C.todayIso()}（星期${wd}）` }), h("div", { class: "hdr-note", text: `👤 ${this.me.name || this.me.username}　內部行政試算輔助工具` })));
 
       this.navList = h("div", {});
       this.sidebar = h("div", { class: "sidebar" }, h("div", { class: "side-h", text: "功能選單" }), h("div", { class: "side-s", text: "拖曳項目可調整順序" }),
@@ -116,7 +157,7 @@
       this.navLabels = {};
       NAV_DEFS.forEach(([n, i, t]) => { this.navLabels[n] = [i, t]; });
       const saved = (this.db.settings.navOrder || []).filter((n) => this.navLabels[n]);
-      this.navOrder = saved.concat(NAV_DEFS.map((d) => d[0]).filter((n) => !saved.includes(n)));
+      this.navOrder = saved.concat(NAV_DEFS.map((d) => d[0]).filter((n) => !saved.includes(n))).filter((n) => this.tabAllowed(n));
       this.navItems = {};
       this.navOrder.forEach((n) => this.makeNav(n));
       this.repackNav();
@@ -178,6 +219,7 @@
       else if (n === "📊 月報表") { this.refreshReportMonth(); this.renderReport(); }
       else if (n === "🛠️ 軟體設定") this.loadSettingsIntoForm();
       else if (n === "🏮 農民曆") this.renderAlmanac();
+      else if (n === "🔐 帳號權限") this.renderAccounts();
     }
     refreshAll() {
       this.refreshEmployeeCombos(); this.refreshRecordsFilters(); this.renderEmployees(); this.renderRecords(); this.renderScheduleGrid();
@@ -236,7 +278,7 @@
         job = setTimeout(() => { toast.textContent = ""; }, 1500);
       };
       const panel = h("div", { class: "dlg pad", style: { width: "560px", maxWidth: "100%" } },
-        U.sectionHeader("📋", "待辦通知內容", opt.subtitle), h("div", { class: "mb8" }, box),
+        U.sectionHeader("📋", opt.title || "待辦通知內容", opt.subtitle), h("div", { class: "mb8" }, box),
         h("div", { class: "row" }, U.primary("📋 複製文字", doCopy), U.ghost("關閉", close), toast));
       const host = opt.modal ? U.modal(panel) : h("div", { class: "float" }, panel);
       if (!opt.modal) document.body.append(host);
@@ -280,7 +322,7 @@
       const preview = U.card(h("div", { class: "pad", style: { display: "flex", flexDirection: "column", height: "100%" } },
         U.sectionHeader("🔍", "判定預覽", "系統依目前輸入的時段即時試算，可送出前先行確認"),
         h("div", { class: "grow" }, this.previewFrame, this.quickLeaveFrame),
-        U.primary("💾 儲存紀錄並自動判定", () => this.saveRecord(), { class: "btn primary taller", style: { marginTop: "14px" } })));
+        U.primary("💾 儲存紀錄並自動判定", () => this.saveRecord(), { class: "btn primary taller wr", style: { marginTop: "14px" } })));
       const note = h("div", { class: "pad" }, U.sectionHeader("ℹ️", "判定邏輯說明"),
         [["🟠", "實際工時 > 應班時數 → 需送出加班單，依勞基法試算加班費倍率"], ["🔴", "實際工時 < 應班時數 → 需送出請假單，並可一鍵登記特休／補休"],
           ["🛡️", "另會檢查休息時間、單日工時上限、換班間隔等基本合規事項"]].map(([i, s]) => h("div", { class: "row mb4", style: { flexWrap: "nowrap" } }, h("span", { text: i }), h("span", { class: "sub", text: s }))));
@@ -447,7 +489,7 @@
       if (this.entryHint) pf.append(h("div", { class: "pl sub", style: { whiteSpace: "pre-wrap" }, text: this.entryHint }));
       if ((flag === "ot" || typhoon) && r.detailLines.length) pf.append(h("div", { class: "pl sub" }, r.detailLines.map((l) => h("div", { text: `・${l}` }))));
       if (r.warnings.length) pf.append(h("div", { class: "pl" }, r.warnings.map((w) => U.colored(`⚠ ${w}`, X.orange))));
-      if (flag === "leave" && !typhoon) {
+      if (flag === "leave" && !typhoon && this.can("punch")) {
         const clH = Math.max(0.5, Math.ceil(r.shortfall / 0.5) * 0.5);
         if (emp.type === "fulltime") {
           const alH = [4, 8].find((x) => Math.abs(r.shortfall - x) < 0.01);
@@ -543,7 +585,7 @@
         if (ff !== "全部狀態" && C.STATUS_MAP[flag] !== ff) continue;
         let status = C.STATUS_MAP[flag];
         if (flag === "ot" && r.flag !== "ot") status += "（休假出勤）";
-        rows.push({ key: rec.id, cls: "c-" + flag, status, cells: [rec.date, emp.name, DAYTYPE_LABEL[rec.dayType], this.L.formatShiftCell(rec.empId, rec.date, shift), C.formatSegmentsText(rec, " / "), C.pf(rec.scheduledHours), C.hr(r.actualHours), status, "🗑"] });
+        rows.push({ key: rec.id, cls: "c-" + flag, status, cells: [rec.date, emp.name, DAYTYPE_LABEL[rec.dayType], this.L.formatShiftCell(rec.empId, rec.date, shift), C.formatSegmentsText(rec, " / "), C.pf(rec.scheduledHours), C.hr(r.actualHours), status, this.can("records") ? "🗑" : ""] });
       }
       this.recTree.render(rows, this.recTree.first());
       const ot = rows.filter((x) => x.status.startsWith("需加班單")).length, lv = rows.filter((x) => x.status.startsWith("需請假單")).length, nm = rows.filter((x) => x.status === "正常").length;
@@ -566,6 +608,7 @@
         rec.note ? h("div", { class: "sub", text: `📝 備註：${rec.note}`, style: { marginTop: "4px" } }) : null));
     }
     async deleteRecord(id) {
+      if (!this.can("records")) return;
       if (!(await msg.ask("確認刪除", "確定刪除此筆紀錄？"))) return;
       this.db.records = this.db.records.filter((r) => r.id !== id);
       this.persist();
@@ -585,9 +628,9 @@
       t.append(U.card(h("div", { class: "pad" },
         U.sectionHeader("📇", "員工清單", "雙擊列表中的員工可載入修改；選取後可用「上移／下移」調整順序，此順序會同步套用到「排班班表」"), this.empStats,
         h("div", { class: "row mb8" }, h("span", { text: "🔍" }), h("div", { class: "grow", style: { minWidth: "140px" } }, this.eSearch), U.ghost("✖ 清除", () => { this.eSearch.value = ""; this.renderEmployees(); }),
-          h("label", { class: "check" }, this.eShowInactive, "顯示離職員工"), U.primary("➕ 新增員工", () => this.openEmployeeDialog()))),
-      this.empTree, h("div", { class: "row", style: { padding: "0 10px 10px" } }, U.ghost("▲ 上移", () => this.moveSelectedEmp(-1)), U.ghost("▼ 下移", () => this.moveSelectedEmp(1)), h("div", { class: "grow" }),
-        U.ghost("✏️ 編輯選取員工", () => { const e = this.L.findEmp(this.empTree.first()); if (e) this.openEmployeeDialog(e); else msg.info("提醒", "請先選取要編輯的員工"); }), U.danger("🗑 刪除選取員工", () => this.deleteSelectedEmp()))));
+          h("label", { class: "check" }, this.eShowInactive, "顯示離職員工"), U.primary("➕ 新增員工", () => this.openEmployeeDialog(), { class: "btn primary wr" }))),
+      this.empTree, h("div", { class: "row", style: { padding: "0 10px 10px" } }, U.ghost("▲ 上移", () => this.moveSelectedEmp(-1), { class: "btn ghost wr" }), U.ghost("▼ 下移", () => this.moveSelectedEmp(1), { class: "btn ghost wr" }), h("div", { class: "grow" }),
+        U.ghost("✏️ 編輯選取員工", () => { const e = this.L.findEmp(this.empTree.first()); if (e) this.openEmployeeDialog(e); else msg.info("提醒", "請先選取要編輯的員工"); }, { class: "btn ghost wr" }), U.danger("🗑 刪除選取員工", () => this.deleteSelectedEmp(), { class: "btn danger wr" }))));
     }
     renderEmployees(keep) {
       const kw = this.eSearch.value.trim().toLowerCase(), showIn = this.eShowInactive.checked || !!kw, rows = [], shown = [];
@@ -604,6 +647,7 @@
         U.chip("👔", shown.filter((e) => e.type === "fulltime").length, "正職", X.gold).el, U.chip("🅿️", shown.filter((e) => e.type === "pt").length, "PT工讀生", X.teal).el);
     }
     openEmployeeDialog(emp) {
+      if (!this.can("employees")) return;
       const isEdit = !!emp, F = {};
       F.empno = U.input("例如：A001"); F.name = U.input("例如：王小明");
       F.type = new U.OptionMenu(C.EMP_TYPE_OPTIONS, () => toggleHire());
@@ -707,6 +751,7 @@
       this.refreshEmployeeCombos(); this.renderEmployees();
     }
     moveEmployeeOrder(empId, dir, activeOnly) {
+      if (!this.can("employees") && !this.can("schedule")) return;
       const ordered = this.L.scheduledEmployees();
       if (activeOnly) {
         const wk = this.scheduleWeekStart, idxs = [];

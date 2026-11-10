@@ -14,6 +14,14 @@ var COLLECTIONS = Object.keys(SHEETS);
 var SESSION_DAYS = 30;
 var CELL_LIMIT = 49000;
 var LAW_URL = "https://law.moj.gov.tw/LawClass/LawAll.aspx?PCode=N0030001";
+var ADMIN = "admin";
+var MODULES = ["report", "punch", "records", "employees", "schedule", "leave", "settings"];
+var EMP_MODULES = ["report", "records", "schedule", "leave"];   // 員工帳號只能開放這幾項，而且只能看
+// 每種資料可由哪些功能的「可編輯」權限寫入（排班會連動假別與員工、合併員工會連動全部）
+var WRITE_BY = {
+  employees: ["employees", "schedule"], records: ["punch", "records", "employees"], leaveLedger: ["punch", "report", "leave", "schedule", "employees"],
+  shiftSchedule: ["schedule", "employees"], nameGlyphs: ["schedule", "employees"], settings: ["settings"]
+};
 
 // 第一次部署後在編輯器手動執行一次：跳出 Google 授權並建立工作表
 function authorizeOnce() {
@@ -29,10 +37,20 @@ function doPost(e) {
   try {
     var pub = { status: status_, setup: setup_, login: login_ };
     if (pub[req.action]) return json_(pub[req.action](req));
-    if (!validToken_(req.token)) return json_({ error: "auth" });
-    var priv = { logout: logout_, rev: rev_, load: load_, apply: apply_, restore: restore_, lawCheck: lawCheck_, changePassword: changePassword_ };
-    if (!priv[req.action]) return json_({ error: "unknown_action" });
-    return json_(priv[req.action](req));
+    var user = tokenUser_(req.token);
+    if (!user) return json_({ error: "auth" });
+    if (req.action === "rev") return json_(rev_());       // 幾秒一次，不讀帳號資料
+    var acc = accounts_()[user];
+    if (!acc) return json_({ error: "auth" });
+    if (req.action === "logout") return json_(logout_(req));
+    if (req.action === "changePassword") return json_(changePassword_(req, acc));
+    if (acc.must) return json_({ error: "must_change" });
+    var priv = { load: load_, apply: apply_, lawCheck: lawCheck_ };
+    if (priv[req.action]) return json_(priv[req.action](req, acc));
+    var adminOnly = { restore: restore_, accountsList: accountsList_, accountSave: accountSave_, accountsBatch: accountsBatch_, accountReset: accountReset_, accountDelete: accountDelete_ };
+    if (!adminOnly[req.action]) return json_({ error: "unknown_action" });
+    if (!acc.admin) return json_({ error: "forbidden" });
+    return json_(adminOnly[req.action](req, acc));
   } catch (err) {
     return json_({ error: "server", message: String(err && err.message || err) });
   }
@@ -62,49 +80,95 @@ function status_() {
   if (!salt) { salt = randomToken_(); p.setProperty("salt", salt); }
   return { needsSetup: !p.getProperty("pwHash"), salt: salt };
 }
-function checkKey_(key) {
-  return same_(sha_(props_().getProperty("salt") + ":" + key), props_().getProperty("pwHash") || "");
+function hashKey_(salt, key) { return sha_(salt + ":" + key); }
+function accKey_(u) { return "acc_" + sha_(u); }
+function normUser_(u) { return String(u === undefined || u === null ? "" : u).trim().toLowerCase(); }
+
+// ---- 帳號：每個帳號一筆 Script Property，讀取走快取；原本的管理密碼自動成為 admin ----
+function accounts_() {
+  var cache = CacheService.getScriptCache(), hit = cache.get("accounts");
+  if (hit) return JSON.parse(hit);
+  var p = props_(), all = p.getProperties(), out = {};
+  Object.keys(all).forEach(function (k) { if (k.indexOf("acc_") === 0) { var a = JSON.parse(all[k]); out[a.u] = a; } });
+  if (!out[ADMIN] && all.pwHash) {
+    out[ADMIN] = { u: ADMIN, name: "管理員", empId: "", admin: true, perms: {}, s: all.salt, h: all.pwHash };
+    p.setProperty(accKey_(ADMIN), JSON.stringify(out[ADMIN]));
+  }
+  try { cache.put("accounts", JSON.stringify(out), 21600); } catch (e) { /* 太大就不快取 */ }
+  return out;
 }
-function issueToken_() {
+function putAccount_(a) { props_().setProperty(accKey_(a.u), JSON.stringify(a)); CacheService.getScriptCache().remove("accounts"); }
+function setSecret_(a, key) { a.s = randomToken_(); a.h = hashKey_(a.s, key); }
+function normPerms_(perms, empId) {
+  var out = {};
+  MODULES.forEach(function (m) {
+    var v = (perms || {})[m];
+    if (v !== "view" && v !== "edit") v = "none";
+    if (empId) { if (EMP_MODULES.indexOf(m) < 0) v = "none"; else if (v === "edit") v = "view"; }
+    out[m] = v;
+  });
+  return out;
+}
+function allEdit_() { var o = {}; MODULES.forEach(function (m) { o[m] = "edit"; }); return o; }
+function publicAcc_(a) { return { username: a.u, name: a.name, empId: a.empId || "", admin: !!a.admin, perms: a.admin ? allEdit_() : normPerms_(a.perms, a.empId), mustChange: !!a.must }; }
+function tokenParts_(v) {               // 舊版的登入憑證只存到期時間，一律視為 admin
+  if (String(v).charAt(0) !== "{") return { e: Number(v), u: ADMIN };
+  return JSON.parse(v);
+}
+function issueToken_(user) {
   var t = randomToken_();
-  props_().setProperty("tok_" + sha_(t), String(Date.now() + SESSION_DAYS * 86400000));
+  props_().setProperty("tok_" + sha_(t), JSON.stringify({ e: Date.now() + SESSION_DAYS * 86400000, u: user }));
   pruneTokens_();
   return t;
 }
 function pruneTokens_() {
   var p = props_(), all = p.getProperties(), now = Date.now();
-  Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0 && Number(all[k]) < now) p.deleteProperty(k); });
+  Object.keys(all).forEach(function (k) { if (k.indexOf("tok_") === 0 && tokenParts_(all[k]).e < now) p.deleteProperty(k); });
 }
-function validToken_(t) {          // 幾秒一次的同步檢查走快取，避開 PropertiesService 每日讀取上限
-  if (!t) return false;
-  var hash = sha_(String(t)), cache = CacheService.getScriptCache();
-  if (cache.get("tk_" + hash)) return true;
-  var exp = props_().getProperty("tok_" + hash);
-  if (!exp || Number(exp) <= Date.now()) return false;
-  cache.put("tk_" + hash, "1", Math.min(21600, Math.floor((Number(exp) - Date.now()) / 1000)));
-  return true;
+function tokenUser_(t) {                // 幾秒一次的同步檢查走快取，避開 PropertiesService 每日讀取上限
+  if (!t) return null;
+  var hash = sha_(String(t)), cache = CacheService.getScriptCache(), hit = cache.get("tk_" + hash);
+  if (hit) return hit === "1" ? ADMIN : hit;
+  var v = props_().getProperty("tok_" + hash);
+  if (!v) return null;
+  var parts = tokenParts_(v);
+  if (parts.e <= Date.now()) return null;
+  cache.put("tk_" + hash, parts.u, Math.min(21600, Math.floor((parts.e - Date.now()) / 1000)));
+  return parts.u;
+}
+function revokeTokens_(user) {
+  var p = props_(), all = p.getProperties(), cache = CacheService.getScriptCache();
+  Object.keys(all).forEach(function (k) {
+    if (k.indexOf("tok_") !== 0 || tokenParts_(all[k]).u !== user) return;
+    p.deleteProperty(k);
+    cache.remove("tk_" + k.slice(4));
+  });
 }
 function setup_(req) {
   return withLock_(function () {
     if (props_().getProperty("pwHash")) return { error: "already_setup" };
     if (!req.key) return { error: "bad_request" };
     status_();
-    props_().setProperty("pwHash", sha_(props_().getProperty("salt") + ":" + req.key));
+    props_().setProperty("pwHash", hashKey_(props_().getProperty("salt"), req.key));
+    CacheService.getScriptCache().remove("accounts");
     ensureSheets_();
-    return { token: issueToken_() };
+    accounts_();
+    return { token: issueToken_(ADMIN) };
   });
 }
 function login_(req) {
-  var cache = CacheService.getScriptCache();
-  var fails = Number(cache.get("loginFails") || 0);
-  if (fails >= 10) return { error: "locked" };          // 連續錯太多次先鎖 10 分鐘
+  var user = normUser_(req.username) || ADMIN;           // 舊版網頁沒有帳號欄位，視為 admin
+  var cache = CacheService.getScriptCache(), failKey = "loginFails_" + sha_(user);
+  var fails = Number(cache.get(failKey) || 0);
+  if (fails >= 10) return { error: "locked" };           // 同一帳號連續錯太多次先鎖 10 分鐘
   if (!props_().getProperty("pwHash")) return { error: "needs_setup" };
-  if (!req.key || !checkKey_(req.key)) {
-    cache.put("loginFails", String(fails + 1), 600);
+  var acc = accounts_()[user];
+  if (!req.key || !acc || !same_(hashKey_(acc.s, req.key), acc.h)) {
+    cache.put(failKey, String(fails + 1), 600);
     return { error: "wrong_password" };
   }
-  cache.remove("loginFails");
-  return { token: issueToken_() };
+  cache.remove(failKey);
+  return { token: issueToken_(user), mustChange: !!acc.must };
 }
 function logout_(req) {
   var hash = sha_(String(req.token));
@@ -112,18 +176,108 @@ function logout_(req) {
   CacheService.getScriptCache().remove("tk_" + hash);
   return { ok: true };
 }
-function changePassword_(req) {
-  if (!checkKey_(req.key || "")) return { error: "wrong_password" };
+function changePassword_(req, acc) {
+  if (!req.key || !same_(hashKey_(acc.s, req.key), acc.h)) return { error: "wrong_password" };
   if (!req.newKey) return { error: "bad_request" };
-  var p = props_();
-  p.setProperty("pwHash", sha_(p.getProperty("salt") + ":" + req.newKey));
-  var all = p.getProperties();
-  Object.keys(all).forEach(function (k) {                // 其他裝置全部登出
-    if (k.indexOf("tok_") !== 0) return;
-    p.deleteProperty(k);
-    CacheService.getScriptCache().remove("tk_" + k.slice(4));
+  setSecret_(acc, req.newKey);
+  delete acc.must;
+  if (acc.admin) props_().setProperty("pwHash", hashKey_(props_().getProperty("salt"), req.newKey));
+  putAccount_(acc);
+  revokeTokens_(acc.u);                                  // 這個帳號的其他裝置全部登出
+  return { token: issueToken_(acc.u) };
+}
+
+// ---- 帳號管理（只有管理員能呼叫）----
+function validNewAcc_(req, all) {
+  var u = normUser_(req.username);
+  if (!u || u.length > 40) return "bad_username";
+  if (all[u]) return "duplicate";
+  if (!req.key) return "bad_request";
+  if (req.empId && Object.keys(all).some(function (k) { return all[k].empId === req.empId; })) return "emp_taken";
+  return "";
+}
+function newAcc_(req) {
+  var a = { u: normUser_(req.username), name: String(req.name || req.username).trim(), empId: req.empId || "", admin: false, perms: normPerms_(req.perms, req.empId), must: true };
+  setSecret_(a, req.key);
+  return a;
+}
+function accountsList_() {
+  var all = accounts_();
+  return { accounts: Object.keys(all).map(function (k) { return publicAcc_(all[k]); }) };
+}
+function accountSave_(req) {
+  return withLock_(function () {
+    var all = accounts_(), u = normUser_(req.username), a = all[u];
+    if (req.isNew) {
+      var err = validNewAcc_(req, all);
+      if (err) return { error: err };
+      a = newAcc_(req);
+    } else {
+      if (!a) return { error: "not_found" };
+      if (a.admin) return { error: "forbidden" };
+      if (req.empId && Object.keys(all).some(function (k) { return k !== u && all[k].empId === req.empId; })) return { error: "emp_taken" };
+      a.name = String(req.name || a.name).trim();
+      a.empId = req.empId || "";
+      a.perms = normPerms_(req.perms, a.empId);
+    }
+    putAccount_(a);
+    return { rev: bump_() };                             // 版本號變動，對方的畫面幾秒內跟著更新權限
   });
-  return { token: issueToken_() };
+}
+function accountsBatch_(req) {
+  return withLock_(function () {
+    var all = accounts_(), made = [], skipped = [], batch = {};
+    (req.list || []).forEach(function (item) {
+      var err = validNewAcc_(item, all);
+      if (err) { skipped.push({ username: item.username, error: err }); return; }
+      var a = newAcc_(item);
+      all[a.u] = a;
+      batch[accKey_(a.u)] = JSON.stringify(a);
+      made.push(a.u);
+    });
+    if (made.length) { props_().setProperties(batch); CacheService.getScriptCache().remove("accounts"); }
+    return { made: made, skipped: skipped, rev: bump_() };
+  });
+}
+function accountReset_(req) {
+  return withLock_(function () {
+    var a = accounts_()[normUser_(req.username)];
+    if (!a) return { error: "not_found" };
+    if (a.admin) return { error: "forbidden" };
+    if (!req.key) return { error: "bad_request" };
+    setSecret_(a, req.key);
+    a.must = true;
+    putAccount_(a);
+    revokeTokens_(a.u);
+    return { ok: true };
+  });
+}
+function accountDelete_(req) {
+  return withLock_(function () {
+    var a = accounts_()[normUser_(req.username)];
+    if (!a) return { error: "not_found" };
+    if (a.admin) return { error: "forbidden" };
+    props_().deleteProperty(accKey_(a.u));
+    CacheService.getScriptCache().remove("accounts");
+    revokeTokens_(a.u);
+    return { rev: bump_() };
+  });
+}
+function canRead_(acc) {
+  var p = acc.admin ? allEdit_() : normPerms_(acc.perms, acc.empId);
+  var on = function (m) { return p[m] !== "none"; }, heavy = p.schedule === "edit" || p.employees === "edit";   // 排班、員工編輯會連動出勤與假別
+  var calc = on("report") || on("punch") || on("records") || on("leave") || heavy;
+  return { records: calc, leaveLedger: calc, shiftSchedule: calc || on("schedule"), nameGlyphs: heavy && !acc.empId };
+}
+function canApply_(acc, ops) {
+  if (acc.admin) return true;
+  if (acc.empId) return false;
+  var p = normPerms_(acc.perms, "");
+  return Object.keys(ops || {}).every(function (c) {
+    var o = ops[c];
+    if (!o || (!(o.upsert || []).length && !(o.del || []).length)) return true;
+    return (WRITE_BY[c] || []).some(function (m) { return p[m] === "edit"; });
+  });
 }
 
 // ---- 試算表 ----
@@ -181,11 +335,16 @@ function bump_() {
 
 function rev_() { return { rev: revision_() }; }
 
-function load_() {
-  var out = { rev: revision_() };
-  ["employees", "records", "leaveLedger", "shiftSchedule"].forEach(function (c) { out[c] = readAll_(c); });
+function load_(req, acc) {
+  var out = { rev: revision_(), me: publicAcc_(acc) }, can = canRead_(acc);
+  ["employees", "records", "leaveLedger", "shiftSchedule"].forEach(function (c) {
+    if (c !== "employees" && !can[c]) { out[c] = []; return; }
+    var rows = readAll_(c);
+    if (acc.empId) rows = rows.filter(function (x) { return (c === "employees" ? x.id : x.empId) === acc.empId; });   // 員工只拿得到自己的資料
+    out[c] = rows;
+  });
   var glyphs = {};
-  readAll_("nameGlyphs").forEach(function (g) { glyphs[g.empId] = g.images; });
+  if (can.nameGlyphs) readAll_("nameGlyphs").forEach(function (g) { glyphs[g.empId] = g.images; });
   out.nameGlyphs = glyphs;
   var settings = {}, sh = sheet_("settings"), last = sh.getLastRow();
   if (last >= 2) sh.getRange(2, 1, last - 1, 2).getValues().forEach(function (r) { settings[r[0]] = JSON.parse(r[1]); });
@@ -214,7 +373,8 @@ function applyCollection_(c, ops) {
   rows.sort(function (a, b) { return b - a; }).forEach(function (r) { sh.deleteRow(r); });
 }
 
-function apply_(req) {
+function apply_(req, acc) {
+  if (!canApply_(acc, req.ops)) return { error: "forbidden" };
   return withLock_(function () {
     var before = revision_();
     COLLECTIONS.forEach(function (c) { applyCollection_(c, (req.ops || {})[c]); });

@@ -4,7 +4,8 @@
   "use strict";
   const C = window.Core;
   const COLS = ["employees", "records", "leaveLedger", "shiftSchedule"];
-  const LS_TOKEN = "att_token", LS_PENDING = "att_pending";
+  const LS_TOKEN = "att_token", LS_PENDING = "att_pending", LS_PREFS = "att_prefs";
+  const PREF_KEYS = ["navOrder", "appearanceMode", "scheduleCellFontSize"];   // 沒有軟體設定權限時，這幾項只存在自己的裝置
   const POLL_MS = 4000;
 
   const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -33,6 +34,8 @@
       this.onStatus = () => {};
       this.onRemote = () => {};
       this.onAuthLost = () => {};
+      this.onForbidden = () => {};
+      this.me = null;
       this.failed = false;
       this.pendingCount = 0;
     }
@@ -45,6 +48,7 @@
       const data = await res.json();
       if (data.error === "auth") { this.setToken(""); this.onAuthLost(); throw new Error("auth"); }
       if (data.error === "server") throw new Error(data.message || "server");
+      if (data.error === "must_change" || (data.error === "forbidden" && action === "apply")) throw new Error(data.error);
       return data;
     }
     setToken(t) {
@@ -57,8 +61,9 @@
       if (r.token) this.setToken(r.token);
       return r;
     }
-    async login(password, salt) {
-      const r = await this.call("login", { key: await deriveKey(password, salt) });
+    keyFor(password, salt) { return deriveKey(password, salt); }
+    async login(username, password, salt) {
+      const r = await this.call("login", { username, key: await deriveKey(password, salt) });
       if (r.token) this.setToken(r.token);
       return r;
     }
@@ -77,7 +82,9 @@
     adopt(data) {
       this.rev = data.rev || 0;
       this.lawCache = data.lawCache || {};
+      this.me = data.me || null;
       this.db = C.parseDb(data);
+      if (this.prefsLocal) { try { Object.assign(this.db.settings, JSON.parse(localStorage.getItem(LS_PREFS) || "{}")); } catch (_e) { /* 壞了就用共用設定 */ } }
       for (const c of COLS) this.db[c].forEach((it) => { if (!it.id) it.id = C.newId(); });
       this.snap = this.takeSnapshot();
     }
@@ -89,6 +96,12 @@
         try { this.mergeQueue(JSON.parse(left)); this.applyQueueLocally(); this.flushSoon(); } catch (_e) { localStorage.removeItem(LS_PENDING); }
       }
       this.startPolling();
+    }
+    get prefsLocal() { return !(this.me && (this.me.admin || this.me.perms.settings === "edit")); }
+    savePrefs() {
+      const o = {};
+      PREF_KEYS.forEach((k) => { if (k in this.db.settings) o[k] = this.db.settings[k]; });
+      localStorage.setItem(LS_PREFS, JSON.stringify(o));
     }
     takeSnapshot() {
       const s = {};
@@ -130,6 +143,10 @@
         const prev = this.snap[c], upsert = [], del = [];
         for (const k of Object.keys(obj)) {
           const s = JSON.stringify(obj[k]);
+          if (c === "settings" && this.prefsLocal && PREF_KEYS.includes(k)) {
+            if (prev.get(k) !== s) { prev.set(k, s); this.savePrefs(); }
+            continue;
+          }
           if (prev.get(k) !== s) { upsert.push(this.row(c, obj[k], k)); prev.set(k, s); }
         }
         for (const k of Array.from(prev.keys())) if (!(k in obj)) { del.push(k); prev.delete(k); }
@@ -211,6 +228,13 @@
         if (this.queue) this.flushSoon();
         else if (others) this.pullRemote();
       } catch (e) {
+        if (e.message === "forbidden") {             // 權限不足：丟棄這批修改，畫面回到雲端的內容
+          this.sending = false; this.queue = null; this.pendingCount = 0; this.failed = false;
+          localStorage.removeItem(LS_PENDING);
+          await this.pullRemote(true);
+          this.onForbidden();
+          return;
+        }
         this.sending = false;
         this.failed = true;
         const later = this.queue;

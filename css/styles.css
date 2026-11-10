@@ -258,3 +258,8 @@ input[type=range] { width: 100%; accent-color: var(--teal); }
   .ftr .r { display: none; }
   .float { right: 12px; left: 12px; width: auto; }
 }
+
+/* 權限：只能檢視的分頁隱藏所有會寫入的控制項 */
+.tab.ro .wr, .tab.ro .ord, .tab.ro .off-b, .tab.ro .tag-chip button { display: none !important; }
+.tab.ro .sg .cell { cursor: default; }
+.perm-grid { display: grid; grid-template-columns: 1fr 150px; gap: 6px 12px; align-items: center; }

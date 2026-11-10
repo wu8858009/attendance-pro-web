@@ -19,8 +19,8 @@
           h("div", { class: "row mb8", style: { justifyContent: "space-between", alignItems: "flex-start" } },
             U.sectionHeader("🗓️", "員工排週班", "以週為單位安排員工班表，點擊下方格子會在原地彈出視窗新增或修改班別"),
             h("div", { style: { textAlign: "right" } },
-              h("div", { class: "row", style: { justifyContent: "flex-end" } }, U.btn("blue", "📷 讀取照片  Ctrl+O", () => this.scheduleImportPhoto()), U.ghost("📋 貼上截圖  Ctrl+V", () => this.scheduleImportClipboard())),
-              h("div", { class: "sub", text: "從班表照片／截圖自動排入本週班表", style: { marginTop: "4px" } }))),
+              h("div", { class: "row", style: { justifyContent: "flex-end" } }, U.btn("blue", "📷 讀取照片  Ctrl+O", () => this.scheduleImportPhoto(), { class: "btn blue wr" }), U.ghost("📋 貼上截圖  Ctrl+V", () => this.scheduleImportClipboard(), { class: "btn ghost wr" })),
+              h("div", { class: "sub wr", text: "從班表照片／截圖自動排入本週班表", style: { marginTop: "4px" } }))),
           h("div", { class: "row", style: { gap: "8px 40px" } },
             h("div", { class: "row" }, U.ghost("‹ 上週", () => this.changeWeek(-1)), this.weekLabel, U.ghost("下週 ›", () => this.changeWeek(1)), U.ghost("本週", () => this.changeWeek(0, true))), legend))),
         U.accentCard(X.green, h("div", { class: "pad" }, h("div", { class: "row mb8" }, h("div", { class: "sec", style: { margin: 0 } }, h("div", { class: "badge", text: "👥" }), h("div", { class: "sec-t", text: "本週上班名單" })), this.rosterSummary), this.rosterGrid)),
@@ -183,6 +183,7 @@
 
     // ---- 排班視窗 ----
     openShiftPopup(empId, d) {
+      if (!this.can("schedule")) return;
       const emp = this.L.findEmp(empId);
       if (!emp) return;
       this.closeShiftPopup();
@@ -277,6 +278,7 @@
       this.renderScheduleGrid(); this.renderAnnualCard(); this.renderLeaveLedger();
     },
     openBatchOff(empId) {
+      if (!this.can("schedule")) return;
       const emp = this.L.findEmp(empId);
       if (!emp) return;
       this.closeShiftPopup();
@@ -307,6 +309,7 @@
 
     // ---- 從照片／剪貼簿讀取班表 ----
     async scheduleImportPhoto() {
+      if (!this.can("schedule")) return;
       const f = await U.pickFile("image/*");
       if (f) this.scheduleReadImage(f);
     },
@@ -324,6 +327,7 @@
       await msg.info("提示", "這個瀏覽器不允許按鈕直接讀取剪貼簿。\n請在排班班表頁按 Ctrl+V 貼上截圖。");
     },
     async scheduleReadImage(blob) {
+      if (!this.can("schedule")) return;
       if (this.ocrBusy) return;
       this.ocrBusy = true;
       this.closeShiftPopup();
