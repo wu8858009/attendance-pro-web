@@ -464,7 +464,10 @@ function restore_(req, acc) {           // 整份覆蓋：從備份還原、第�
 
 // ---- 操作紀錄：只有管理員看得到；寫入失敗不影響原本的動作 ----
 function auditNow_() { return Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy-MM-dd HH:mm:ss"); }
-function auditTime_(v) { return v instanceof Date ? Utilities.formatDate(v, "Asia/Taipei", "yyyy-MM-dd HH:mm:ss") : String(v); }
+function auditTime_(v) {           // 早期幾筆被試算表轉成日期，實測內部值等於以 UTC 存台北時間；之後的紀錄都是純文字
+  if (v instanceof Date) return Utilities.formatDate(v, "GMT", "yyyy-MM-dd HH:mm:ss");
+  return String(v).replace(/^'/, "");
+}
 function auditSheet_() {
   var ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(AUDIT_SHEET);
   if (sh) return sh;
@@ -477,7 +480,7 @@ function auditSheet_() {
 function audit_(acc, action, detail) {
   try {
     var sh = auditSheet_();
-    sh.appendRow([auditNow_(), safe_(acc.u), safe_(acc.name), action, safe_(detail || "")]);
+    sh.appendRow(["'" + auditNow_(), safe_(acc.u), safe_(acc.name), action, safe_(detail || "")]);
     if (sh.getLastRow() > AUDIT_MAX + 1) sh.deleteRows(2, AUDIT_TRIM);     // 超過上限時刪掉最舊的一批
   } catch (e) { console.warn("audit failed: " + e); }
 }

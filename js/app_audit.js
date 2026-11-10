@@ -4,7 +4,7 @@
   const C = window.Core, U = window.UI, { h, clear, msg } = U, X = U.COLORS;
   const TAB = "🧾 登入操作紀錄";
   const KINDS = { 全部類型: "", 登入登出: "login", 資料異動: "data", 帳號與密碼: "account" };
-  const ALL = "全部人員";
+  const ALL = "全部人員", LIVE_MS = 5000;
   const personLabel = (p) => (p.name && p.name !== p.username ? `${p.name}（${p.username}）` : p.username);
   const csvCell = (v) => { let s = String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
 
@@ -20,6 +20,7 @@
       this.auTo = new U.DateEntry(go);
       this.auTo.set(C.todayIso());
       this.auStats = h("div", { class: "chips mb8" });
+      this.auLive = h("span", { class: "sub" });
       this.auSum = new U.Table([
         { key: "name", title: "人員", width: 180, left: true }, { key: "login", title: "最後登入時間", width: 170 }, { key: "action", title: "最後操作時間", width: 170 }, { key: "count", title: "登入次數", width: 80 },
       ], { maxHeight: 300, onSelect: () => this.auPickPerson() });
@@ -31,29 +32,39 @@
         U.card(h("div", { style: { padding: "12px 16px 0" } }, U.sectionHeader("🧾", "人員總覽", "每個帳號最後一次登入與操作的時間；點一下人員可篩選下方清單")), this.auSum),
         U.card(h("div", { class: "pad" }, U.sectionHeader("🔍", "篩選條件", "紀錄保存在 Google 試算表的「操作紀錄」工作表，最多保留最近約 2 萬筆"),
           h("div", { class: "grid4 mb8" }, h("div", {}, U.sub("人員"), this.auUser), h("div", {}, U.sub("類型"), this.auKind), h("div", {}, U.sub("起始日期"), this.auFrom), h("div", {}, U.sub("結束日期"), this.auTo)),
-          h("div", { class: "row" }, U.primary("🔄 重新整理", go), U.ghost("⬇ 匯出 CSV", () => this.exportAudit())), h("div", { style: { marginTop: "10px" } }, this.auStats))),
+          h("div", { class: "row" }, U.primary("🔄 重新整理", go), U.ghost("⬇ 匯出 CSV", () => this.exportAudit()), this.auLive), h("div", { style: { marginTop: "10px" } }, this.auStats))),
         U.card(h("div", { style: { padding: "12px 16px 0" } }, U.sectionHeader("📜", "紀錄清單", "最新的在最上面；點選一筆可看完整內容")), this.auTree, this.auDetail));
+      setInterval(() => { if (this.navSelected === TAB && !document.hidden && !document.querySelector(".overlay")) this.renderAudit(true); }, LIVE_MS);
     },
     auQuery() {
       const label = this.auUser.get(), who = this.auPeople.find((p) => personLabel(p) === label);
       return { user: who ? who.username : "", kind: KINDS[this.auKind.get()], from: this.auFrom.get().trim(), to: this.auTo.get().trim() };
     },
-    async renderAudit() {
-      if (!this.me.admin || !this.auTree) return;
+    async renderAudit(live) {
+      if (!this.me.admin || !this.auTree || (live && this.auBusy)) return;
       const token = (this.auToken = (this.auToken || 0) + 1);
       let r;
-      try { r = await this.store.call("auditList", this.auQuery()); } catch (_e) { return; }
+      this.auBusy = true;
+      try { r = await this.store.call("auditList", this.auQuery()); } catch (_e) { this.auBusy = false; return; }
+      this.auBusy = false;
       if (token !== this.auToken || r.error) return;
+      this.auLive.textContent = `🟢 即時更新中（${new Date().toTimeString().slice(0, 8)}）`;
+      const sig = JSON.stringify([r.rows, r.summary, r.matched]);
+      if (sig === this.auSig) return;                   // 沒有新紀錄就不重畫，選取和捲動位置不會跳掉
+      this.auSig = sig;
+      const keepTree = live === true ? this.auTree.first() : undefined, keepSum = live === true ? this.auSum.first() : undefined;
       this.auRows = r.rows;
+      this.auMatched = r.matched;
       this.auPeople = r.summary.slice().sort((a, b) => C.cmp(b.lastLogin, a.lastLogin) || C.cmp(a.username, b.username));
       const cur = this.auUser.get(), names = [ALL].concat(this.auPeople.map(personLabel));
       this.auUser.configure(names);
       this.auUser.set(names.includes(cur) ? cur : ALL);
-      this.auSum.render(this.auPeople.map((p) => ({ key: p.username, cells: [personLabel(p), p.lastLogin || "－", p.lastAction || "－", String(p.logins)] })));
-      this.auTree.render(r.rows.map((x, i) => ({ key: String(i), cls: x.action === "登入失敗" ? "c-leave" : "", cells: [x.time, x.name || x.username, x.action, x.detail] })));
+      this.auSum.render(this.auPeople.map((p) => ({ key: p.username, cells: [personLabel(p), p.lastLogin || "－", p.lastAction || "－", String(p.logins)] })), keepSum);
+      this.auTree.render(r.rows.map((x, i) => ({ key: String(r.matched - i), cls: x.action === "登入失敗" ? "c-leave" : "", cells: [x.time, x.name || x.username, x.action, x.detail] })), keepTree);
       clear(this.auStats).append(U.chip("📜", r.matched, "符合筆數", X.tealL).el, U.chip("👀", r.rows.length, "目前顯示", X.gold).el);
       clear(this.auDetail);
-      if (r.matched > r.rows.length) this.auDetail.textContent = `符合的紀錄較多，只顯示最新 ${r.rows.length} 筆，可縮小日期範圍查看更早的紀錄。`;
+      if (keepTree) this.auShowDetail();
+      else if (r.matched > r.rows.length) this.auDetail.textContent = `符合的紀錄較多，只顯示最新 ${r.rows.length} 筆，可縮小日期範圍查看更早的紀錄。`;
     },
     auPickPerson() {
       const p = this.auPeople.find((x) => x.username === this.auSum.first());
@@ -62,7 +73,7 @@
       this.renderAudit();
     },
     auShowDetail() {
-      const row = (this.auRows || [])[Number(this.auTree.first())];
+      const row = (this.auRows || [])[this.auMatched - Number(this.auTree.first())];
       this.auDetail.textContent = row ? `${row.time}　${row.name || row.username}　${row.action}${row.detail ? "\n" + row.detail : ""}` : "";
     },
     async exportAudit() {
