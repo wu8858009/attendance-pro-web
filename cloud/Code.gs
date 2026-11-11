@@ -97,20 +97,26 @@ function nameUsed_(all, name, exceptUser) {
   return !!key && Object.keys(all).some(function (k) { return k !== exceptUser && nameKey_(all[k].name) === key; });
 }
 function loginChoices_() {              // 登入畫面的下拉選單：管理員、幹部，加上目前在職的員工
-  var all = accounts_(), byEmp = {}, out = [], seen = {};
+  var all = accounts_(), emps = readAll_("employees"), byEmp = {}, noByName = {}, out = [], seen = {};
+  var empNo = function (e) { return String(e.empNo || "").trim(); };
+  var tag = function (n) { return n ? "（" + n + "）" : ""; };          // 括號顯示員工編號，沒有編號就只顯示姓名
+  emps.forEach(function (e) {             // 幹部帳號沒綁定員工，用姓名找編號；在職的優先
+    var k = nameKey_(e.name);
+    if (empNo(e) && (!noByName[k] || e.isActive !== false)) noByName[k] = empNo(e);
+  });
   Object.keys(all).sort().forEach(function (k) {
     var a = all[k];
     if (a.empId) byEmp[a.empId] = a;
     else if (a.admin) out.unshift({ u: a.u, label: "管理員（" + a.u + "）", has: true });
-    else { out.push({ u: a.u, label: a.name + "（幹部）", has: true }); seen[nameKey_(a.name)] = 1; }
+    else { out.push({ u: a.u, label: a.name + tag(noByName[nameKey_(a.name)]), has: true }); seen[nameKey_(a.name)] = 1; }
   });
-  readAll_("employees").filter(function (e) { return e.isActive !== false; })
+  emps.filter(function (e) { return e.isActive !== false; })
     .sort(function (a, b) { return (a.scheduleOrder === undefined ? 9999 : a.scheduleOrder) - (b.scheduleOrder === undefined ? 9999 : b.scheduleOrder); })
     .forEach(function (e) {                // 同名只列一次，幹部帳號優先
       var a = byEmp[e.id], key = nameKey_(e.name);
       if (seen[key]) return;
       seen[key] = 1;
-      out.push({ u: a ? a.u : "", label: e.name, has: !!a });
+      out.push({ u: a ? a.u : "", label: e.name + tag(empNo(e)), has: !!a });
     });
   return out;
 }
